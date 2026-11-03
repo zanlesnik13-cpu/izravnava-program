@@ -14,17 +14,29 @@ os.environ["MPLCONFIGDIR"] = os.path.join(str(ROOT_DIR), ".matplotlib_cache")
 
 import streamlit as st
 
-# Varno uvažanje modulov z diagnostiko za Streamlit Cloud
+# Varno uvažanje modulov z diagnostiko za Streamlit Cloud in lokalni zagon
 try:
     import auth
     from modules import mnk_izravnava
     from modules import mreze_meritve
     from modules import transformacije
     from modules import deformacije
+except ModuleNotFoundError as e_mod:
+    # Rezervni poskus uvoza v kolikor bi bili moduli v korenskem imeniku
+    try:
+        import auth
+        import mnk_izravnava
+        import mreze_meritve
+        import transformacije
+        import deformacije
+    except Exception:
+        st.error(f"⚠️ Napaka pri uvozu modulov: {e_mod}")
+        st.warning("Na GitHub niste naložili mape **`modules/`** ali datoteke **`modules/__init__.py`**!")
+        st.info("V Git repozitorij dodajte mapo `modules/` z ukazom: `git add modules/` in `git push`.")
+        st.code(f"Korenski imenik: {ROOT_DIR}\nRazpoložljive datoteke: {os.listdir(str(ROOT_DIR))}")
+        st.stop()
 except Exception as err:
-    st.error(f"⚠️ Napaka pri uvozu geodetskih modulov: {err}")
-    st.info("Preverite, ali so vsi moduli v mapi `modules/` naloženi na GitHub skupaj z datoteko `__init__.py`.")
-    st.code(f"Sistemska pot sys.path: {sys.path}\nKorenski imenik: {ROOT_DIR}")
+    st.error(f"⚠️ Nepričakovana napaka pri nalaganju modulov: {err}")
     st.stop()
 
 
