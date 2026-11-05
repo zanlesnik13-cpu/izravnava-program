@@ -6,17 +6,19 @@ from datetime import datetime
 from pathlib import Path
 import streamlit as st
 import pandas as pd
+import github_sync
 
 # =============================================================================
 # POTI DO PODATKOV IN INICIALIZACIJA
 # =============================================================================
-DATA_DIR = Path("data")
+ROOT_DIR = Path(__file__).resolve().parent
+DATA_DIR = ROOT_DIR / "data"
 USERS_DIR = DATA_DIR / "users"
 AUTH_FILE = DATA_DIR / "auth_users.json"
 
 
 def init_storage():
-    """Zagotovi obstoj map in datoteke z uporabniki."""
+    """Zagotovi obstoj map in datoteke z uporabniki ter ob zagonu obnovi podatke iz GitHuba."""
     DATA_DIR.mkdir(parents=True, exist_ok=True)
     USERS_DIR.mkdir(parents=True, exist_ok=True)
     gitkeep = USERS_DIR / ".gitkeep"
@@ -26,6 +28,12 @@ def init_storage():
     if not AUTH_FILE.exists():
         with open(AUTH_FILE, "w", encoding="utf-8") as f:
             json.dump({}, f, indent=2, ensure_ascii=False)
+
+    # Avtomatska obnova podatkov iz GitHub repozitorija ob prvem zagonu seje (npr. po spanju Streamlit Cloud)
+    try:
+        github_sync.github_restore_all_users_on_startup(force=False)
+    except Exception:
+        pass
 
 
 # =============================================================================
@@ -67,6 +75,7 @@ def save_all_users(users: dict):
     init_storage()
     with open(AUTH_FILE, "w", encoding="utf-8") as f:
         json.dump(users, f, indent=2, ensure_ascii=False)
+    github_sync.github_push_file("data/auth_users.json", "Posodobitev registriranih uporabnikov (auth_users.json)")
 
 
 def get_user_dir(username: str) -> Path:
@@ -120,14 +129,22 @@ def register_user(username: str, display_name: str, password: str, role: str = "
     with open(user_dir / "saved_adjustments.json", "w", encoding="utf-8") as f:
         json.dump({}, f, indent=2, ensure_ascii=False)
 
-    return True, "Profil uspešno ustvarjen! Zdaj se lahko prijavite."
+    # Avtomatski zapis novega profila v GitHub repozitorij
+    github_sync.github_push_file(f"data/users/{key}/profile.json", f"Ustvarjen profil uporabnika @{key}", silent=True)
+    github_sync.github_push_file(f"data/users/{key}/saved_adjustments.json", f"Inicializacija projektov za @{key}", silent=True)
+
+    return True, "Profil uspešno ustvarjen in sinhroniziran! Zdaj se lahko prijavite."
 
 
 def authenticate_user(username: str, password: str) -> tuple[bool, dict | None, str]:
     users = get_all_users()
     key = username.strip().lower()
     if key not in users:
-        return False, None, "Uporabniško ime ne obstaja."
+        # Poskusi osvežiti uporabnike iz GitHuba, če je bil profil ustvarjen na drugi napravi
+        github_sync.github_restore_all_users_on_startup(force=True)
+        users = get_all_users()
+        if key not in users:
+            return False, None, "Uporabniško ime ne obstaja."
 
     user_record = users[key]
     if verify_password(password, user_record["salt"], user_record["hash"]):
@@ -163,17 +180,22 @@ def get_user_profile(username: str) -> dict:
 
 
 def save_user_profile(username: str, profile_data: dict):
-    user_dir = get_user_dir(username)
+    key = username.lower().strip()
+    user_dir = get_user_dir(key)
     with open(user_dir / "profile.json", "w", encoding="utf-8") as f:
         json.dump(profile_data, f, indent=2, ensure_ascii=False)
+    github_sync.github_push_file(f"data/users/{key}/profile.json", f"Posodobitev profila @{key}")
 
 
 # =============================================================================
-# SHRANJEVANJE IN NALAGANJE PROJEKTOV IZRAVNAV
+# SHRANJEVANJE IN NALAGANJE PROJEKTOV IZRAVNAV (MNK & VAJA 3)
 # =============================================================================
 def get_user_saved_adjustments(username: str) -> dict:
-    user_dir = get_user_dir(username)
+    key = username.lower().strip()
+    user_dir = get_user_dir(key)
     adj_file = user_dir / "saved_adjustments.json"
+    if not adj_file.exists():
+        github_sync.github_pull_file(f"data/users/{key}/saved_adjustments.json")
     if adj_file.exists():
         try:
             with open(adj_file, "r", encoding="utf-8") as f:
@@ -184,10 +206,15 @@ def get_user_saved_adjustments(username: str) -> dict:
 
 
 def save_user_saved_adjustments(username: str, data: dict):
-    user_dir = get_user_dir(username)
+    key = username.lower().strip()
+    user_dir = get_user_dir(key)
     adj_file = user_dir / "saved_adjustments.json"
     with open(adj_file, "w", encoding="utf-8") as f:
         json.dump(data, f, indent=2, ensure_ascii=False)
+    github_sync.github_push_file(
+        f"data/users/{key}/saved_adjustments.json",
+        f"Shranjevanje geodetskih projektov uporabnika @{key}"
+    )
 
 
 def serialize_dataframe(df: pd.DataFrame | None) -> dict | None:
@@ -264,8 +291,7 @@ def import_user_backup_json(username: str, json_str: str) -> tuple[bool, str]:
         data = json.loads(json_str)
         if "saved_adjustments" not in data:
             return False, "Neveljavna datoteka varnostne kopije (manjka 'saved_adjustments')."
-        
-        # Posodobi obstoječe ali uvozi
+
         existing = get_user_saved_adjustments(username)
         imported_adj = data["saved_adjustments"]
         existing.update(imported_adj)
@@ -273,11 +299,11 @@ def import_user_backup_json(username: str, json_str: str) -> tuple[bool, str]:
 
         if "profile" in data:
             prof = data["profile"]
-            prof["username"] = username  # ohrani trenutnega uporabnika
+            prof["username"] = username
             save_user_profile(username, prof)
 
         count = len(imported_adj)
-        return True, f"Uspešno uvoženih {count} projektov in nastavitve profila!"
+        return True, f"Uspešno uvoženih {count} projektov in nastavitve profila (sinhronizirano)!"
     except Exception as e:
         return False, f"Napaka pri branju JSON datoteke: {str(e)}"
 
@@ -298,7 +324,7 @@ def render_auth_screen():
                     GEODETSKI STUDIO
                 </h1>
                 <p style="color: #bfdbfe; margin: 4px 0 0 0; font-size: 1.05rem;">
-                    Platforma za geodetski izravnalni račun (MNK), analizo mrež, transformacije in deformacije
+                    Platforma za geodetski izravnalni račun (MNK), satelitsko geodezijo, transformacije in analizo mrež
                 </p>
             </div>
         </div>
@@ -307,6 +333,32 @@ def render_auth_screen():
 
     col_center = st.columns([1, 2, 1])[1]
     with col_center:
+        gh_cfg = github_sync.get_github_config()
+        if gh_cfg["enabled"]:
+            st.success(f"🟢 **GitHub Cloud sinhronizacija aktivna** (`{gh_cfg['repo']}` — veja `{gh_cfg['branch']}`)")
+        else:
+            with st.expander("☁️ Nastavitev GitHub Cloud sinhronizacije (za trajno shranjevanje na Streamlit Cloud)", expanded=False):
+                st.markdown("""
+                Za trajno ohranjanje profilov in projektov na **Streamlit Community Cloud** v nastavitvah aplikacije (**App settings ➔ Secrets**) dodajte:
+                ```toml
+                GITHUB_TOKEN = "ghp_VasOsebniGitHubZeton"
+                GITHUB_REPO = "uporabnisko_ime/izravnava-program"
+                GITHUB_BRANCH = "main"
+                ```
+                Ali pa žeton in repozitorij vpišite spodaj za takojšen preizkus:
+                """)
+                m_tok = st.text_input("GitHub Personal Access Token (`GITHUB_TOKEN`):", value=gh_cfg["token"], type="password", key="login_gh_tok")
+                m_rep = st.text_input("GitHub repozitorij (`owner/repo`):", value=gh_cfg["repo"] or "uporabnik/izravnava-program", key="login_gh_rep")
+                if st.button("🔗 Poveži in obnovi uporabnike iz GitHuba", use_container_width=True):
+                    st.session_state["gh_manual_token"] = m_tok.strip()
+                    st.session_state["gh_manual_repo"] = m_rep.strip()
+                    ok_r, msg_r, _ = github_sync.github_restore_all_users_on_startup(force=True)
+                    if ok_r:
+                        st.success(msg_r)
+                        st.rerun()
+                    else:
+                        st.error(msg_r)
+
         st.markdown("""
         <div style="background-color: #f8fafc; border: 1px solid #e2e8f0; border-radius: 12px; padding: 20px 24px 10px 24px; margin-bottom: 20px;">
             <p style="font-size: 1.05rem; font-weight: 600; color: #1e3a8a; margin: 0 0 6px 0;">
@@ -358,7 +410,6 @@ def render_auth_screen():
                     else:
                         ok, reg_msg = register_user(reg_user, reg_name, reg_pass1, reg_role)
                         if ok:
-                            # Avtomatska prijava po uspešni registraciji
                             _, user_info, _ = authenticate_user(reg_user, reg_pass1)
                             st.session_state["current_user"] = user_info
                             st.success(f"Dobrodošli, {user_info['display_name']}! Vaš profil je pripravljen.")
@@ -366,4 +417,4 @@ def render_auth_screen():
                         else:
                             st.error(reg_msg)
 
-        st.caption("🔒 Vaši podatki in projekti so ločeno shranjeni v vaši varni uporabniški mapi. Gesla so šifrirana s PBKDF2-HMAC-SHA256.")
+        st.caption("🔒 Vaši podatki in projekti so ločeno shranjeni v vaši varni uporabniški mapi in samodejno sinhronizirani z GitHub oblakom. Gesla so šifrirana s PBKDF2-HMAC-SHA256.")

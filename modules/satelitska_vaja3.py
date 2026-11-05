@@ -1,12 +1,14 @@
 import os
 import re
 import io
+import json
 import subprocess
 from datetime import datetime, timedelta
 import numpy as np
 import pandas as pd
 import streamlit as st
 import plotly.graph_objects as go
+import github_sync
 
 
 # =============================================================================
@@ -578,6 +580,62 @@ def render_satelitska_vaja3_module(current_user: dict):
         </p>
     </div>
     """, unsafe_allow_html=True)
+
+    # Shranjevanje in nalaganje projekta Vaje 3 v uporabniški profil + GitHub Cloud
+    uname_key = current_user.get("username", "student").lower().strip()
+    v3_proj_rel = f"data/users/{uname_key}/vaja3_projects.json"
+    v3_proj_abs = os.path.join(root_dir, "data", "users", uname_key, "vaja3_projects.json")
+    os.makedirs(os.path.dirname(v3_proj_abs), exist_ok=True)
+    if not os.path.exists(v3_proj_abs):
+        github_sync.github_pull_file(v3_proj_rel, v3_proj_rel)
+    saved_v3 = {}
+    if os.path.exists(v3_proj_abs):
+        try:
+            with open(v3_proj_abs, "r", encoding="utf-8") as f:
+                saved_v3 = json.load(f)
+        except Exception:
+            saved_v3 = {}
+
+    with st.expander("💾 Shranjevanje in nalaganje projektov Vaje 3 (Lokalno & GitHub oblak)", expanded=False):
+        cs1, cs2, cs3 = st.columns([1.4, 1.2, 1])
+        with cs1:
+            v3_save_name = st.text_input("Ime projekta Vaje 3:", value="Vaja 3 — FGG2 & SIGNAL", key="v3_proj_save_name")
+            if st.button("💾 Shrani projekt Vaje 3 (v profil in na GitHub)", use_container_width=True):
+                pid = re.sub(r"[^a-zA-Z0-9_-]", "_", v3_save_name.strip()) or "vaja3_projekt"
+                pts_to_save = st.session_state.get("v3_df_points_active", st.session_state.v3_df_points)
+                saved_v3[pid] = {
+                    "name": v3_save_name.strip(),
+                    "updated_at": datetime.now().strftime("%Y-%m-%d %H:%M"),
+                    "mean_epoch": float(st.session_state.v3_mean_epoch),
+                    "points": pts_to_save.to_dict(orient="records"),
+                }
+                with open(v3_proj_abs, "w", encoding="utf-8") as f:
+                    json.dump(saved_v3, f, indent=2, ensure_ascii=False)
+                github_sync.github_push_file(v3_proj_rel, f"Shranjen projekt Vaje 3 ({v3_save_name}) za @{uname_key}")
+                st.success(f"Projekt '{v3_save_name}' shranjen in sinhroniziran z GitHubom!")
+        with cs2:
+            if saved_v3:
+                sel_v3_id = st.selectbox(
+                    "Shranjeni projekti Vaje 3:",
+                    options=list(saved_v3.keys()),
+                    format_func=lambda k: f"{saved_v3[k].get('name', k)} ({saved_v3[k].get('updated_at', '')})"
+                )
+            else:
+                sel_v3_id = None
+                st.caption("Ni še shranjenih projektov Vaje 3.")
+        with cs3:
+            if sel_v3_id:
+                if st.button("📂 Naloži izbrani projekt", use_container_width=True):
+                    rec = saved_v3[sel_v3_id]
+                    st.session_state.v3_mean_epoch = float(rec.get("mean_epoch", 2026.152030))
+                    st.session_state.v3_df_points = pd.DataFrame(rec.get("points", []))
+                    st.rerun()
+                if st.button("🗑️ Izbriši projekt", use_container_width=True):
+                    del saved_v3[sel_v3_id]
+                    with open(v3_proj_abs, "w", encoding="utf-8") as f:
+                        json.dump(saved_v3, f, indent=2, ensure_ascii=False)
+                    github_sync.github_push_file(v3_proj_rel, f"Izbrisan projekt Vaje 3 za @{uname_key}")
+                    st.rerun()
 
     tab1, tab2, tab3, tab4 = st.tabs([
         "1️⃣ Izluščitev koordinat (.txt) & Srednja epoha",

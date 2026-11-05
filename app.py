@@ -17,6 +17,7 @@ import streamlit as st
 # Varno uvažanje modulov z diagnostiko za Streamlit Cloud in lokalni zagon
 try:
     import auth
+    import github_sync
     from modules import mnk_izravnava
     from modules import mreze_meritve
     from modules import transformacije
@@ -26,6 +27,7 @@ except ModuleNotFoundError as e_mod:
     # Rezervni poskus uvoza v kolikor bi bili moduli v korenskem imeniku
     try:
         import auth
+        import github_sync
         import mnk_izravnava
         import mreze_meritve
         import transformacije
@@ -168,6 +170,33 @@ else:
                     st.rerun()
                 else:
                     st.error(msg_imp)
+
+        # GitHub Cloud Sinhronizacija (Push / Pull)
+        gh_cfg = github_sync.get_github_config()
+        last_sync_str = st.session_state.get("gh_last_sync", "—")
+        if st.button("🔄 Sinhroniziraj podatke z GitHubom (Push / Pull)", use_container_width=True):
+            ok_pull, msg_pull, _ = github_sync.github_restore_all_users_on_startup(force=True)
+            ok_push, msg_push, _ = github_sync.github_push_all_local_data()
+            if ok_push:
+                st.toast("☁️ Sinhronizacija z GitHubom uspešna!")
+                st.success(msg_push)
+            else:
+                st.warning(msg_push)
+
+        with st.expander("☁️ GitHub Cloud Sinhronizacija (Status)", expanded=False):
+            if gh_cfg["enabled"]:
+                st.markdown(f"**Status:** 🟢 Povezano z GitHubom\n\n- **Repozitorij:** `{gh_cfg['repo']}`\n- **Veja:** `{gh_cfg['branch']}`\n- **Zadnja sinhronizacija:** `{last_sync_str}`")
+            else:
+                st.markdown("**Status:** 🟡 Lokalni način\n\nZa samodejno shranjevanje na **Streamlit Cloud** dodajte v **App settings ➔ Secrets**:")
+                st.code('GITHUB_TOKEN = "ghp_..."\nGITHUB_REPO = "ime/izravnava-program"\nGITHUB_BRANCH = "main"', language="toml")
+            s_tok = st.text_input("GITHUB_TOKEN:", value=gh_cfg["token"], type="password", key="sb_gh_tok")
+            s_rep = st.text_input("GITHUB_REPO (owner/repo):", value=gh_cfg["repo"], key="sb_gh_rep")
+            s_br = st.text_input("GITHUB_BRANCH:", value=gh_cfg["branch"], key="sb_gh_br")
+            if st.button("💾 Shrani nastavitve povezave za to sejo", use_container_width=True):
+                st.session_state["gh_manual_token"] = s_tok.strip()
+                st.session_state["gh_manual_repo"] = s_rep.strip()
+                st.session_state["gh_manual_branch"] = s_br.strip() or "main"
+                st.rerun()
 
         st.divider()
 
