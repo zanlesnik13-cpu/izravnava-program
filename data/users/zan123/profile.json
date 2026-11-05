@@ -1,0 +1,12 @@
+{
+  "username": "Zan123",
+  "display_name": "Žan Rezar Lesnik",
+  "role": "Študent geodezije (FGG / magistrski študij)",
+  "default_sigma0_sq": 1.0,
+  "default_alpha": 0.05,
+  "default_alpha0": 0.001,
+  "default_beta0": 0.8,
+  "preferred_units": "m",
+  "angle_units": "gon",
+  "created_at": "2026-11-05 21:38:32"
+}
