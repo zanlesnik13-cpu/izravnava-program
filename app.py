@@ -21,6 +21,7 @@ try:
     from modules import mreze_meritve
     from modules import transformacije
     from modules import deformacije
+    from modules import satelitska_vaja3
 except ModuleNotFoundError as e_mod:
     # Rezervni poskus uvoza v kolikor bi bili moduli v korenskem imeniku
     try:
@@ -29,6 +30,7 @@ except ModuleNotFoundError as e_mod:
         import mreze_meritve
         import transformacije
         import deformacije
+        import satelitska_vaja3
     except Exception:
         st.error(f"⚠️ Napaka pri uvozu modulov: {e_mod}")
         st.warning("Na GitHub niste naložili mape **`modules/`** ali datoteke **`modules/__init__.py`**!")
@@ -175,12 +177,20 @@ else:
             "Izbira geodetskega podprograma:",
             [
                 "📐 1. Izravnalni račun in analiza mrež (MNK)",
-                "🗺️ 2. Izravnava 1D/2D mrež iz meritev (Beta)",
-                "🔄 3. Koordinatne transformacije D48/GK ⇄ D96/TM (Beta)",
-                "📊 4. Deformacijska analiza in premiki (Beta)"
+                "🛰️ 2. Satelitska geodezija",
+                "🗺️ 3. Izravnava 1D/2D mrež iz meritev (Beta)",
+                "🔄 4. Koordinatne transformacije D48/GK ⇄ D96/TM (Beta)",
+                "📊 5. Deformacijska analiza in premiki (Beta)"
             ],
             index=0
         )
+
+        if "Satelitska geodezija" in izbrani_modul:
+            st.selectbox(
+                "Podprogram satelitske geodezije:",
+                ["📡 Vaja 3: Koordinatni sistemi pri obravnavi GNSS na območju Slovenije"],
+                index=0
+            )
 
         # Če je izbran MNK modul, prikaži hitre šolske primere v stranski vrstici
         if "1. Izravnalni račun" in izbrani_modul:
@@ -234,14 +244,17 @@ else:
     # =============================================================================
     # USMERJANJE NA IZBRANI GEODETSKI PODPROGRAM
     # =============================================================================
-    if "1. Izravnalni račun" in izbrani_modul:
+    if "Izravnalni račun" in izbrani_modul:
         mnk_izravnava.render_mnk_module(current_user)
 
-    elif "2. Izravnava 1D/2D" in izbrani_modul:
+    elif "Satelitska geodezija" in izbrani_modul:
+        satelitska_vaja3.render_satelitska_vaja3_module(current_user)
+
+    elif "Izravnava 1D/2D" in izbrani_modul:
         mreze_meritve.render_mreze_module(current_user)
 
-    elif "3. Koordinatne transformacije" in izbrani_modul:
+    elif "Koordinatne transformacije" in izbrani_modul:
         transformacije.render_transformacije_module(current_user)
 
-    elif "4. Deformacijska analiza" in izbrani_modul:
+    elif "Deformacijska analiza" in izbrani_modul:
         deformacije.render_deformacije_module(current_user)
