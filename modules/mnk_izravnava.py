@@ -17,6 +17,7 @@ if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
 import auth
+from modules import gppp_importer
 
 
 # =============================================================================
@@ -204,6 +205,33 @@ def nalozi_primer_4():
     st.session_state.df_x0["Ime neznanke"] = ["X1", "Y1", "X2", "Y2"]
     st.session_state.df_x0["Približna vrednost x₀"] = [100.0, 200.0, 150.0, 250.0]
     st.toast("🗺️ Naložen Primer 4: 2D Geodetska mreža 2 točk")
+
+
+def nalozi_primer_5_gppp():
+    epochs = gppp_importer.load_local_gppp_samples()
+    if not epochs:
+        st.error("Lokalnih vzorčnih datotek FGG2 *.CRD ni bilo mogoče najti!")
+        return
+    matrices = gppp_importer.build_gppp_matrices(
+        epochs=epochs,
+        konvencija="KONVENCIJA_1",
+        x0_mode="NULA",
+        multiply_s0=False
+    )
+    st.session_state.metoda = matrices["metoda"]
+    st.session_state.n = matrices["n"]
+    st.session_state.u = matrices["u"]
+    st.session_state.c = matrices["c"]
+    st.session_state.sigma0_sq = 0.020000
+    st.session_state.tip_utezi = matrices["tip_utezi"]
+    st.session_state.df_A = matrices["df_A"]
+    st.session_state.df_B = matrices["df_B"]
+    st.session_state.df_f = matrices["df_f"]
+    st.session_state.df_l = matrices["df_l"]
+    st.session_state.df_Sigma = matrices["df_Sigma"]
+    st.session_state.df_x0 = matrices["df_x0"]
+    izvedi_izravnavo_jedro()
+    st.toast("🛰️ Naložen Primer 5: GNSS gPPP FGG2 (3 epohe, n=9, u=3, c=9)")
 
 
 # =============================================================================
@@ -1059,6 +1087,135 @@ def render_mnk_module(current_user: dict):
                         st.warning("Matrika B in vektor x₀ morata biti ustrezno definirana!")
 
         # ---------------------------------------------------------------------
+        # SAMODEJNI UVOZ GNSS gPPP KOORDINATNIH DATOTEK (*.CRD, *.OUT, *.txt)
+        # ---------------------------------------------------------------------
+        with st.expander("🛰️ Samodejni uvoz GNSS gPPP koordinatnih datotek (*.CRD, *.OUT, *.txt) — Združena izravnava epoh", expanded=False):
+            st.markdown("##### 1. Izbira ali nalaganje gPPP datotek")
+            c_gp1, c_gp2 = st.columns([1.8, 1], gap="medium")
+            
+            with c_gp1:
+                uploaded_gppp = st.file_uploader(
+                    "Naložite eno ali več gPPP koordinatnih datotek (npr. FGG2 *.CRD):",
+                    type=["CRD", "crd", "txt", "out"],
+                    accept_multiple_files=True,
+                    key="gppp_uploader"
+                )
+            
+            with c_gp2:
+                st.caption("Hitri preizkus z vgrajenimi vzorčnimi datotekami:")
+                if st.button("📡 Naloži primere gPPP (FGG2 — 3 epohe)", use_container_width=True):
+                    sample_recs = gppp_importer.load_local_gppp_samples()
+                    if sample_recs:
+                        st.session_state.gppp_current_epochs = sample_recs
+                        st.toast(f"Uspešno prebranih {len(sample_recs)} epoh iz lokalnih datotek FGG2!")
+                    else:
+                        st.error("Lokalnih datotek FGG2 *.CRD ni bilo mogoče najti!")
+            
+            if uploaded_gppp:
+                parsed_list = []
+                for up_file in uploaded_gppp:
+                    try:
+                        content_str = up_file.getvalue().decode("utf-8")
+                    except Exception:
+                        content_str = up_file.getvalue().decode("latin-1")
+                    recs = gppp_importer.parse_gppp_text(content_str, filename=up_file.name)
+                    parsed_list.extend(recs)
+                if parsed_list:
+                    st.session_state.gppp_current_epochs = parsed_list
+
+            # Prikaz predogleda in nastavitev, če so epohe na voljo
+            cur_epochs = st.session_state.get("gppp_current_epochs", [])
+            if cur_epochs:
+                st.markdown(f"###### Pregled prebranih epoh ({len(cur_epochs)} epoh):")
+                df_prev_rows = []
+                for idx, ep in enumerate(cur_epochs):
+                    df_prev_rows.append({
+                        "Epoha": idx + 1,
+                        "Datoteka": ep.get("filename", "Naložena"),
+                        "MJD": ep.get("mjd", "—"),
+                        "Marker": ep.get("marker", "GNSS"),
+                        "S₀ [m]": ep.get("s0", np.nan),
+                        "X [m]": ep["X"],
+                        "Y [m]": ep["Y"],
+                        "Z [m]": ep["Z"],
+                        "Q11": ep["Q11"],
+                        "Q22": ep["Q22"],
+                        "Q33": ep["Q33"],
+                        "Q12": ep["Q12"],
+                        "Q13": ep["Q13"],
+                        "Q23": ep["Q23"]
+                    })
+                df_preview = pd.DataFrame(df_prev_rows)
+                st.dataframe(
+                    df_preview.style.format({
+                        "S₀ [m]": "{:.6f}",
+                        "X [m]": "{:.4f}", "Y [m]": "{:.4f}", "Z [m]": "{:.4f}",
+                        "Q11": "{:.12f}", "Q22": "{:.12f}", "Q33": "{:.12f}",
+                        "Q12": "{:.12f}", "Q13": "{:.12f}", "Q23": "{:.12f}"
+                    }),
+                    use_container_width=True
+                )
+                
+                st.markdown("##### 2. Nastavitve matematičnega modela in stohastike")
+                c_opt1, c_opt2, c_opt3 = st.columns([1.2, 1.2, 1], gap="medium")
+                
+                with c_opt1:
+                    gppp_konvencija = st.radio(
+                        "Konvencija enačb modela:",
+                        options=["KONVENCIJA_1", "KONVENCIJA_2"],
+                        format_func=lambda x: "Konvencija 1 (kot v skripti in FGG2): B = -I, f = x₀ - l (f = -l pri x₀=0)" if x == "KONVENCIJA_1" else "Konvencija 2: B = +I, f = l - x₀ (f = +l pri x₀=0)",
+                        index=0
+                    )
+                
+                with c_opt2:
+                    gppp_x0_mode = st.radio(
+                        "Določitev približnih koordinat x₀:",
+                        options=["NULA", "PRVA_EPOHA", "SREDINA"],
+                        format_func=lambda x: {
+                            "NULA": "x₀ = [0, 0, 0]ᵀ (Direktna izravnava koordinat, kot v FGG2.txt)",
+                            "PRVA_EPOHA": "x₀ = koordinate 1. epohe (X₁, Y₁, Z₁)",
+                            "SREDINA": "x₀ = aritmetična sredina vseh epoh (X̄, Ȳ, Z̄)"
+                        }[x],
+                        index=0
+                    )
+                
+                with c_opt3:
+                    gppp_sigma0_input = st.number_input(
+                        "Varianca a-priori (σ₀²):",
+                        value=float(st.session_state.get("sigma0_sq", 0.020000)),
+                        min_value=0.000001,
+                        max_value=100.0,
+                        format="%.6f",
+                        key="gppp_sigma0_val"
+                    )
+                    gppp_multiply_s0 = st.checkbox("Množi Qij z S₀² posamezne epohe", value=False)
+                
+                if st.button("📥 Naloži gPPP podatke v matrike in prikaži v tabelah", type="primary", use_container_width=True):
+                    gppp_res = gppp_importer.build_gppp_matrices(
+                        epochs=cur_epochs,
+                        konvencija=gppp_konvencija,
+                        x0_mode=gppp_x0_mode,
+                        multiply_s0=gppp_multiply_s0
+                    )
+                    st.session_state.metoda = gppp_res["metoda"]
+                    st.session_state.n = gppp_res["n"]
+                    st.session_state.u = gppp_res["u"]
+                    st.session_state.c = gppp_res["c"]
+                    st.session_state.sigma0_sq = gppp_sigma0_input
+                    st.session_state.tip_utezi = gppp_res["tip_utezi"]
+                    
+                    st.session_state.df_A = gppp_res["df_A"]
+                    st.session_state.df_B = gppp_res["df_B"]
+                    st.session_state.df_f = gppp_res["df_f"]
+                    st.session_state.df_l = gppp_res["df_l"]
+                    st.session_state.df_Sigma = gppp_res["df_Sigma"]
+                    st.session_state.df_x0 = gppp_res["df_x0"]
+                    
+                    izvedi_izravnavo_jedro()
+                    st.success(f"Uspešno naloženih {len(cur_epochs)} epoh GNSS gPPP (n={3*len(cur_epochs)}, u=3, c={3*len(cur_epochs)})! Matrike so spodaj posodobljene.")
+                    st.rerun()
+
+        # ---------------------------------------------------------------------
         # OBSTOJEČI INTERAKTIVNI VNOS MATRIK (ST.DATA_EDITOR) - 100% OHRANJENO!
         # ---------------------------------------------------------------------
         prikazi_vse_A = st.checkbox("Prikaži polno matriko A tudi pri Posredni izravnavi (napredno)", value=False)
@@ -1070,14 +1227,17 @@ def render_mnk_module(current_user: dict):
         if prikazi_A:
             with cols_mat[0]:
                 st.markdown("**Matrika A (koeficienti popravkov $v_j$)**")
-                st.session_state.df_A = st.data_editor(st.session_state.df_A, use_container_width=True, key="editor_A")
+                col_cfg_A = {col: st.column_config.NumberColumn(col, format="%.2f") for col in st.session_state.df_A.columns}
+                st.session_state.df_A = st.data_editor(st.session_state.df_A, column_config=col_cfg_A, use_container_width=True, key="editor_A")
         if prikazi_B:
             with cols_mat[1]:
                 st.markdown("**Matrika B (koeficienti neznank $\Delta_k$)**")
-                st.session_state.df_B = st.data_editor(st.session_state.df_B, use_container_width=True, key="editor_B")
+                col_cfg_B = {col: st.column_config.NumberColumn(col, format="%.2f") for col in st.session_state.df_B.columns}
+                st.session_state.df_B = st.data_editor(st.session_state.df_B, column_config=col_cfg_B, use_container_width=True, key="editor_B")
         with cols_mat[2]:
             st.markdown("**Vektor prostih členov f**")
-            st.session_state.df_f = st.data_editor(st.session_state.df_f, use_container_width=True, key="editor_f")
+            col_cfg_f = {"f (prosti člen)": st.column_config.NumberColumn("f (prosti člen)", format="%.5f")}
+            st.session_state.df_f = st.data_editor(st.session_state.df_f, column_config=col_cfg_f, use_container_width=True, key="editor_f")
 
         st.divider()
         st.subheader("2. Merjena opazovanja, natančnost in približne neznanke")
@@ -1085,15 +1245,18 @@ def render_mnk_module(current_user: dict):
 
         with col_l:
             st.markdown("**Merjena opazovanja ($l_i$) in stohastični model**")
-            st.session_state.df_l = st.data_editor(st.session_state.df_l, use_container_width=True, key="editor_l")
+            col_cfg_l = {"Merjeno l_i": st.column_config.NumberColumn("Merjeno l_i", format="%.5f")}
+            st.session_state.df_l = st.data_editor(st.session_state.df_l, column_config=col_cfg_l, use_container_width=True, key="editor_l")
             if st.session_state.tip_utezi == "POLNA_SIGMA":
                 st.markdown("**Polna kovariančna matrika opazovanj $\Sigma$ ($n \\times n$)**")
-                st.session_state.df_Sigma = st.data_editor(st.session_state.df_Sigma, use_container_width=True, key="editor_Sigma")
+                col_cfg_sigma = {col: st.column_config.NumberColumn(col, format="%.12f") for col in st.session_state.df_Sigma.columns}
+                st.session_state.df_Sigma = st.data_editor(st.session_state.df_Sigma, column_config=col_cfg_sigma, use_container_width=True, key="editor_Sigma")
 
         with col_x0:
             if u > 0:
                 st.markdown("**Poimenovanje neznank (za elipse) in približne vrednosti ($x_0$)**")
-                st.session_state.df_x0 = st.data_editor(st.session_state.df_x0, use_container_width=True, key="editor_x0")
+                col_cfg_x0 = {"Približna vrednost x₀": st.column_config.NumberColumn("Približna vrednost x₀", format="%.5f")}
+                st.session_state.df_x0 = st.data_editor(st.session_state.df_x0, column_config=col_cfg_x0, use_container_width=True, key="editor_x0")
             else:
                 st.caption("V pogojni izravnavi ni neznank ($u = 0$).")
 
@@ -1294,8 +1457,22 @@ def render_mnk_module(current_user: dict):
                 imena = res["imena_x"] if vir_elipse == "NEZNANKE" else [f"l̂_{i+1}" for i in range(res["n"])]
 
                 tocke_pari = []
-                if Q_mat is not None and Q_mat.shape[0] >= 2:
-                    for p in range(Q_mat.shape[0] // 2):
+                dim = Q_mat.shape[0] if Q_mat is not None else 0
+                if dim == 3:
+                    # 3D koordinate (npr. GNSS X, Y, Z) — projekcije na koordinatne ravnine
+                    tocke_pari.append((0, 1, f"3D Točka — Ravnina XY ({imena[0]}, {imena[1]})"))
+                    tocke_pari.append((0, 2, f"3D Točka — Ravnina XZ ({imena[0]}, {imena[2]})"))
+                    tocke_pari.append((1, 2, f"3D Točka — Ravnina YZ ({imena[1]}, {imena[2]})"))
+                elif dim > 3 and dim % 3 == 0 and vir_elipse == "IZRAVNANA_OPAZOVANJA":
+                    # 3D opazovanja po epohah (npr. GNSS gPPP epohe s koordinatami X, Y, Z)
+                    k_epoh = dim // 3
+                    for k in range(k_epoh):
+                        b = 3 * k
+                        tocke_pari.append((b, b + 1, f"Epoha {k+1} — Ravnina XY ({imena[b]}, {imena[b+1]})"))
+                        tocke_pari.append((b, b + 2, f"Epoha {k+1} — Ravnina XZ ({imena[b]}, {imena[b+2]})"))
+                        tocke_pari.append((b + 1, b + 2, f"Epoha {k+1} — Ravnina YZ ({imena[b+1]}, {imena[b+2]})"))
+                elif dim >= 2:
+                    for p in range(dim // 2):
                         ix, iy = 2 * p, 2 * p + 1
                         naziv = f"Točka {p+1} ({imena[ix]}, {imena[iy]})"
                         tocke_pari.append((ix, iy, naziv))
@@ -1303,10 +1480,12 @@ def render_mnk_module(current_user: dict):
                 if not tocke_pari:
                     st.error("V izbranem viru ni vsaj 2 elementov za 2D elipso! Preklopite vir na 'Izravnana opazovanja'.")
                 else:
+                    privzeti_nacin = 1 if (dim == 3 or (dim > 3 and dim % 3 == 0 and vir_elipse == "IZRAVNANA_OPAZOVANJA")) else 0
                     nacin_izrisa = st.radio(
                         "2. Način prikaza:",
                         options=["CELOTNA_MREZA", "POSAMEZNA"],
-                        format_func=lambda x: "🗺️ Celotna 2D mreža z elipsami točk" if x == "CELOTNA_MREZA" else "📈 Posamezna točka / Relativna elipsa"
+                        index=privzeti_nacin,
+                        format_func=lambda x: "🗺️ Celotna 2D mreža z elipsami točk" if x == "CELOTNA_MREZA" else "📈 Posamezna točka / Projekcija na ravnino"
                     )
 
                     idx_a = st.selectbox("Izberite točko A:", range(len(tocke_pari)), format_func=lambda i: tocke_pari[i][2])
