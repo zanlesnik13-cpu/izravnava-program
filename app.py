@@ -199,6 +199,9 @@ else:
             if st.button("🗺️ 4. 2D Mreža (Elipse)"):
                 mnk_izravnava.nalozi_primer_4()
                 mnk_izravnava.izvedi_izravnavo_jedro()
+            if st.button("🛰️ 5. GNSS gPPP (FGG2 — 3 epohe)"):
+                mnk_izravnava.nalozi_primer_5_gppp()
+                mnk_izravnava.izvedi_izravnavo_jedro()
 
             st.divider()
             st.markdown("#### ⚡ Hiter izračun")
