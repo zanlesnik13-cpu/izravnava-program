@@ -201,18 +201,33 @@ else:
         st.divider()
 
         # IZBIRA GEODETSKEGA PODPROGRAMA (MODULA)
-        st.markdown("### 🧭 Geodetski Studio Moduli")
-        izbrani_modul = st.selectbox(
+        st.markdown("### 🧭 Geodetski Moduli")
+        MODULI_SEZNAM = [
+            "📐 1. Izravnalni račun in analiza mrež (MNK & gPPP)",
+            "🛰️ 2. Satelitska geodezija (Vaja 3)",
+            "📊 3. Primerjava koordinat med dvema .txt datotekama",
+            "🗺️ 4. Izravnava 1D/2D mrež iz meritev (Beta)",
+            "🔄 5. Koordinatne transformacije D48/GK ⇄ D96/TM (Beta)",
+            "📈 6. Deformacijska analiza in premiki (Beta)"
+        ]
+        if "app_selected_module" not in st.session_state:
+            st.session_state["app_selected_module"] = MODULI_SEZNAM[0]
+
+        curr_sb_idx = 0
+        if st.session_state["app_selected_module"] in MODULI_SEZNAM:
+            curr_sb_idx = MODULI_SEZNAM.index(st.session_state["app_selected_module"])
+
+        izbrani_sidebar = st.selectbox(
             "Izbira geodetskega podprograma:",
-            [
-                "📐 1. Izravnalni račun in analiza mrež (MNK)",
-                "🛰️ 2. Satelitska geodezija",
-                "🗺️ 3. Izravnava 1D/2D mrež iz meritev (Beta)",
-                "🔄 4. Koordinatne transformacije D48/GK ⇄ D96/TM (Beta)",
-                "📊 5. Deformacijska analiza in premiki (Beta)"
-            ],
-            index=0
+            MODULI_SEZNAM,
+            index=curr_sb_idx,
+            key="sb_geodetic_module_select"
         )
+        if izbrani_sidebar != st.session_state["app_selected_module"]:
+            st.session_state["app_selected_module"] = izbrani_sidebar
+            st.rerun()
+
+        izbrani_modul = st.session_state["app_selected_module"]
 
         if "Satelitska geodezija" in izbrani_modul:
             st.selectbox(
@@ -248,6 +263,8 @@ else:
                 if mnk_izravnava.izvedi_izravnavo_jedro():
                     st.success("Izravnava uspešno izvedena! Rezultati so v zavihkih 3 in 4.")
 
+        st.sidebar.caption("🟢 **Geodetski Studio v2.5** (Vaja 3 & Primerjava .txt aktivna)")
+
         # Prikaz geodetske referenčne literature (viri)
         seznam_virov = preveri_in_pridobi_vire()
         st.divider()
@@ -261,29 +278,66 @@ else:
                 st.caption("Mapa `viri/` je pripravljena. Vanjo lahko naložite svojo geodetsko literaturo in skripte.")
 
     # =============================================================================
-    # GLAVNA GLAVA APLIKACIJE
+    # GLAVNA GLAVA APLIKACIJE Z OZNAKO RAZLIČICE
     # =============================================================================
     st.markdown("""
     <div class="main-header">
-        <h2>📐 GEODETSKI STUDIO — MULTI-MODULARNA PLATFORMA ZA IZRAVNAVE IN ANALIZO MREŽ</h2>
-        <p>Metoda najmanjših kvadratov (MNK) • Baarda Data Snooping & MDB • Plotly interaktivne elipse • Tab S11 Touch UI</p>
+        <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap;">
+            <h2 style="margin: 0; color: white;">📐 GEODETSKI STUDIO — MULTI-MODULARNA PLATFORMA</h2>
+            <span style="background-color: #10b981; color: white; padding: 4px 12px; border-radius: 6px; font-size: 0.82rem; font-weight: 700; letter-spacing: 0.5px; box-shadow: 0 2px 6px rgba(0,0,0,0.2);">
+                v2.5 (Vaja 3 & Primerjava .txt)
+            </span>
+        </div>
+        <p style="margin-top: 6px; color: #bfdbfe;">
+            Metoda najmanjših kvadratov (MNK & gPPP) • Satelitska geodezija (Vaja 3: ITRF2020 ⇄ ETRS89 ⇄ D96-17/TM) • Primerjava dveh .txt datotek (Odstopanja)
+        </p>
     </div>
     """, unsafe_allow_html=True)
 
     # =============================================================================
+    # HITRA HORIZONTALNA NAVIGACIJA NA GLAVNEM ZASLONU (Tab S11 Ultra & Desktop)
+    # =============================================================================
+    st.markdown("""
+    <div style="margin-bottom: 6px;">
+        <span style="font-size: 0.85rem; font-weight: 700; color: #475569; text-transform: uppercase; letter-spacing: 0.5px;">
+            🧭 Izbira geodetskega modula (tudi če je stranska vrstica zaprta):
+        </span>
+    </div>
+    """, unsafe_allow_html=True)
+
+    curr_main_idx = MODULI_SEZNAM.index(st.session_state["app_selected_module"]) if st.session_state["app_selected_module"] in MODULI_SEZNAM else 0
+    izbrani_main = st.radio(
+        "Glavna navigacija po modulih:",
+        MODULI_SEZNAM,
+        index=curr_main_idx,
+        horizontal=True,
+        key="main_geodetic_module_radio",
+        label_visibility="collapsed"
+    )
+    if izbrani_main != st.session_state["app_selected_module"]:
+        st.session_state["app_selected_module"] = izbrani_main
+        st.rerun()
+
+    active_module = st.session_state["app_selected_module"]
+    st.markdown("---")
+
+    # =============================================================================
     # USMERJANJE NA IZBRANI GEODETSKI PODPROGRAM
     # =============================================================================
-    if "Izravnalni račun" in izbrani_modul:
+    if "1. Izravnalni račun" in active_module:
         mnk_izravnava.render_mnk_module(current_user)
 
-    elif "Satelitska geodezija" in izbrani_modul:
+    elif "2. Satelitska geodezija" in active_module:
         satelitska_vaja3.render_satelitska_vaja3_module(current_user)
 
-    elif "Izravnava 1D/2D" in izbrani_modul:
+    elif "3. Primerjava koordinat" in active_module:
+        satelitska_vaja3.render_primerjava_koordinat_tab(ROOT_DIR)
+
+    elif "4. Izravnava 1D/2D" in active_module:
         mreze_meritve.render_mreze_module(current_user)
 
-    elif "Koordinatne transformacije" in izbrani_modul:
+    elif "5. Koordinatne transformacije" in active_module:
         transformacije.render_transformacije_module(current_user)
 
-    elif "Deformacijska analiza" in izbrani_modul:
+    elif "6. Deformacijska analiza" in active_module:
         deformacije.render_deformacije_module(current_user)
