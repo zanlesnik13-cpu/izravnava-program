@@ -881,6 +881,312 @@ def init_vaja3_session():
 # =============================================================================
 # 8. GLAVNI VMESNIK MODULA: SATELITSKA GEODEZIJA — VAJA 3
 # =============================================================================
+
+# =============================================================================
+# 7. SAMOSTOJNI PRIKAZ ORODJA: PRIMERJAVA KOORDINAT MED DVEMA .TXT DATOTEKAMA
+# =============================================================================
+def render_primerjava_koordinat_tab(root_dir=None):
+    if root_dir is None:
+        root_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    init_vaja3_session()
+    st.subheader("📊 4️⃣ Primerjava koordinat med dvema .txt datotekama in izpis odstopanj")
+    st.markdown("""
+    To orodje omogoča natančno medsebojno primerjavo poljubnih dveh koordinatnih datotek (`.txt` ali `.crd`), npr.:
+    - **Datoteka 1:** Izravnane PPP koordinate v ITRF2020 ali transformirane ETRF2000 (iz poročil MNK).
+    - **Datoteka 2:** Uradne referenčne koordinate (npr. `D96_17.txt` / Bernese / ITRS-SI / EPN).
+    
+    Za vsako ujemajočo se točko program samodejno:
+    1. Izračuna **kartezična prostorska odstopanja (ECEF)**: $\Delta X, \Delta Y, \Delta Z$ in celoten 3D vektor $\Delta D_{3D} = \sqrt{\Delta X^2 + \Delta Y^2 + \Delta Z^2}$ v [m] in [mm].
+    2. Pretvori koordinate na **elipsoid GRS80** in v državno **D96/TM projekcijo** ter izračuna: $\Delta e, \Delta n, \Delta h, \Delta H$, horizontalni 2D vektor $\Delta s_{2D} = \sqrt{\Delta e^2 + \Delta n^2}$ in smerni kot (azimut $\theta$).
+    3. Pripravi **popolno statistično oceno**: Min, Max, Povprečje (Mean), Standardni odklon (Std) in Srednji kvadratni pogrešek (RMSE).
+    4. **Samodejno shrani poročilo na disk** v `Primerjava_Koordinat_Odstopanja.txt` ter ponudi prenos (`.txt`, `.csv`, `.xlsx`).
+    """)
+
+    scanned = scan_workspace_coordinate_files(root_dir)
+    scanned_options = {s[0]: s[2] for s in scanned}
+
+    st.markdown("---")
+    cq1, cq2 = st.columns([1.5, 2])
+    with cq1:
+        load_defaults = st.button("⚡ 1-Klik: Naloži privzeti datoteki (D96_17.txt in Izravnane_Koordinate_ITRF2020)", type="secondary", use_container_width=True)
+
+    cf1, cf2 = st.columns(2)
+    with cf1:
+        st.markdown("##### 📁 Datoteka 1 (Vhod 1 — npr. D96_17 ali referenca)")
+        f1_upload = st.file_uploader("Naložite Datoteko 1 (.txt, .crd):", type=["txt", "crd", "dat"], key="v3_comp_up1")
+        opt_list1 = ["-- Ročno naložena datoteka --"] + list(scanned_options.keys())
+        def_idx1 = 0
+        for idx, k in enumerate(opt_list1):
+            if "D96_17.txt" in k:
+                def_idx1 = idx
+                break
+        sel_ws_1 = st.selectbox("Ali izberite iz delovne mape (Datoteka 1):", options=opt_list1, index=def_idx1, key="v3_comp_ws1")
+
+    with cf2:
+        st.markdown("##### 📁 Datoteka 2 (Vhod 2 — npr. Izravnane koordinate ITRF2020)")
+        f2_upload = st.file_uploader("Naložite Datoteko 2 (.txt, .crd):", type=["txt", "crd", "dat"], key="v3_comp_up2")
+        opt_list2 = ["-- Ročno naložena datoteka --"] + list(scanned_options.keys())
+        def_idx2 = 0
+        for idx, k in enumerate(opt_list2):
+            if "Izravnane" in k:
+                def_idx2 = idx
+                break
+        sel_ws_2 = st.selectbox("Ali izberite iz delovne mape (Datoteka 2):", options=opt_list2, index=def_idx2, key="v3_comp_ws2")
+
+    c_opt1, c_opt2 = st.columns(2)
+    with c_opt1:
+        mode_sub = st.radio(
+            "Smer odštevanja razlik (Δ):",
+            [
+                "Δ = Datoteka 1 - Datoteka 2 (npr. D96_17 - ITRF2020)",
+                "Δ = Datoteka 2 - Datoteka 1 (npr. ITRF2020 - D96_17)"
+            ],
+            index=0,
+            key="v3_comp_mode_sub"
+        )
+    with c_opt2:
+        sort_pts = st.selectbox(
+            "Razvrščanje točk v tabeli in poročilu:",
+            ["Vrstni red v Datoteki 1", "Vrstni red v Datoteki 2", "Po abecedi točk (A-Ž)"],
+            index=0,
+            key="v3_comp_sort_by"
+        )
+
+    btn_run = st.button("🚀 Izvedi primerjavo koordinat in izračun odstopanj", type="primary", use_container_width=True)
+
+    if load_defaults or btn_run:
+        src1 = None
+        label1 = "Datoteka 1"
+        if load_defaults:
+            d96_cand = os.path.join(root_dir, "D96_17.txt")
+            if os.path.exists(d96_cand):
+                src1 = d96_cand
+                label1 = "D96_17.txt"
+        elif f1_upload is not None:
+            src1 = f1_upload
+            label1 = f1_upload.name
+        elif sel_ws_1 != "-- Ročno naložena datoteka --" and sel_ws_1 in scanned_options:
+            src1 = scanned_options[sel_ws_1]
+            label1 = sel_ws_1
+
+        src2 = None
+        label2 = "Datoteka 2"
+        if load_defaults:
+            for cand_fn in ["Izravnane_Koordinate_in_Odkloni_ITRF2020 (3).txt", "Izravnane_Koordinate_in_Odkloni_ITRF2020.txt"]:
+                cand_path = os.path.join(root_dir, cand_fn)
+                if os.path.exists(cand_path):
+                    src2 = cand_path
+                    label2 = cand_fn
+                    break
+        elif f2_upload is not None:
+            src2 = f2_upload
+            label2 = f2_upload.name
+        elif sel_ws_2 != "-- Ročno naložena datoteka --" and sel_ws_2 in scanned_options:
+            src2 = scanned_options[sel_ws_2]
+            label2 = sel_ws_2
+
+        if not src1 or not src2:
+            st.error("Prosimo, izberite ali naložite obe datoteki (Datoteka 1 in Datoteka 2)!")
+        else:
+            p1_list, fmt1 = parse_coordinate_txt(src1)
+            p2_list, fmt2 = parse_coordinate_txt(src2)
+
+            if not p1_list:
+                st.error(f"V Datoteki 1 ({label1}) ni bilo najdenih veljavnih točk s koordinatami X, Y, Z.")
+            elif not p2_list:
+                st.error(f"V Datoteki 2 ({label2}) ni bilo najdenih veljavnih točk s koordinatami X, Y, Z.")
+            else:
+                df_comp, df_stats, msg = compare_two_coordinate_files(
+                    p1_list, p2_list, mode_subtraction=mode_sub, sort_by=sort_pts
+                )
+                if df_comp.empty:
+                    st.error(msg)
+                else:
+                    rep_txt = generate_comparison_report_txt(
+                        df_comp, df_stats, label1, label2, mode_sub, fmt1, fmt2
+                    )
+                    st.session_state.v3_comp_df_result = df_comp
+                    st.session_state.v3_comp_df_stats = df_stats
+                    st.session_state.v3_comp_report_txt = rep_txt
+                    st.session_state.v3_comp_label1 = label1
+                    st.session_state.v3_comp_label2 = label2
+                    st.session_state.v3_comp_fmt1 = fmt1
+                    st.session_state.v3_comp_fmt2 = fmt2
+
+                    out_local = os.path.join(root_dir, "Primerjava_Koordinat_Odstopanja.txt")
+                    try:
+                        with open(out_local, "w", encoding="utf-8") as f_out:
+                            f_out.write(rep_txt)
+                        st.session_state.v3_comp_saved_file = out_local
+                    except Exception:
+                        st.session_state.v3_comp_saved_file = None
+
+                    st.success(f"✅ {msg}")
+
+    if "v3_comp_df_result" in st.session_state and not st.session_state.v3_comp_df_result.empty:
+        df_res = st.session_state.v3_comp_df_result
+        df_st = st.session_state.v3_comp_df_stats
+        rep_text = st.session_state.v3_comp_report_txt
+        saved_f = st.session_state.get("v3_comp_saved_file")
+
+        if saved_f:
+            st.info(f"💾 Poročilo je bilo samodejno shranjeno v lokalno delovno mapo: `{saved_f}`")
+
+        st.markdown("---")
+        m1, m2, m3, m4, m5 = st.columns(5)
+        with m1:
+            st.metric("Skupne točke", f"{len(df_res)}")
+        with m2:
+            max_s2d = df_res["ds_2D_mm"].max()
+            st.metric("Max Δs_2D", f"{max_s2d:.1f} mm")
+        with m3:
+            rmse_s2d = df_st[df_st["Komponenta"] == "ds_2D_m"]["RMSE_mm"].values[0]
+            st.metric("RMSE Δs_2D", f"{rmse_s2d:.1f} mm")
+        with m4:
+            rmse_dh = df_st[df_st["Komponenta"] == "dh_m"]["RMSE_mm"].values[0]
+            st.metric("RMSE Δh", f"{rmse_dh:.1f} mm")
+        with m5:
+            rmse_3d = df_st[df_st["Komponenta"] == "dD_3D_m"]["RMSE_mm"].values[0]
+            st.metric("RMSE ΔD_3D", f"{rmse_3d:.1f} mm")
+
+        t_tab1, t_tab2, t_tab3, t_tab4 = st.tabs([
+            "📐 1. ECEF Kartezične razlike (XYZ)",
+            "🗺️ 2. D96/TM Ravninska & Višinska odstopanja",
+            "📈 3. Statistični povzetek (Min, Max, RMSE)",
+            "📊 4. Interaktivni grafi odstopanj"
+        ])
+
+        with t_tab1:
+            st.dataframe(
+                df_res[[
+                    "TOCKA", "X1", "Y1", "Z1", "X2", "Y2", "Z2",
+                    "dX_m", "dY_m", "dZ_m", "dD_3D_m",
+                    "dX_mm", "dY_mm", "dZ_mm", "dD_3D_mm"
+                ]].style.format({
+                    "X1": "{:.4f}", "Y1": "{:.4f}", "Z1": "{:.4f}",
+                    "X2": "{:.4f}", "Y2": "{:.4f}", "Z2": "{:.4f}",
+                    "dX_m": "{:+.4f}", "dY_m": "{:+.4f}", "dZ_m": "{:+.4f}", "dD_3D_m": "{:.4f}",
+                    "dX_mm": "{:+.1f}", "dY_mm": "{:+.1f}", "dZ_mm": "{:+.1f}", "dD_3D_mm": "{:.1f}"
+                }),
+                use_container_width=True
+            )
+
+        with t_tab2:
+            st.dataframe(
+                df_res[[
+                    "TOCKA", "e1", "n1", "h1", "H1", "e2", "n2", "h2", "H2",
+                    "de_m", "dn_m", "dh_m", "dH_m", "ds_2D_m",
+                    "de_mm", "dn_mm", "dh_mm", "dH_mm", "ds_2D_mm", "azimut_deg"
+                ]].style.format({
+                    "e1": "{:.4f}", "n1": "{:.4f}", "h1": "{:.4f}", "H1": "{:.4f}",
+                    "e2": "{:.4f}", "n2": "{:.4f}", "h2": "{:.4f}", "H2": "{:.4f}",
+                    "de_m": "{:+.4f}", "dn_m": "{:+.4f}", "dh_m": "{:+.4f}", "dH_m": "{:+.4f}", "ds_2D_m": "{:.4f}",
+                    "de_mm": "{:+.1f}", "dn_mm": "{:+.1f}", "dh_mm": "{:+.1f}", "dH_mm": "{:+.1f}", "ds_2D_mm": "{:.1f}",
+                    "azimut_deg": "{:.2f}°"
+                }),
+                use_container_width=True
+            )
+
+        with t_tab3:
+            st.dataframe(
+                df_st[[
+                    "Oznaka", "Min_mm", "Max_mm", "Mean_mm", "Std_mm", "RMSE_mm", "RMSE"
+                ]].style.format({
+                    "Min_mm": "{:+.2f}", "Max_mm": "{:+.2f}", "Mean_mm": "{:+.2f}",
+                    "Std_mm": "{:.2f}", "RMSE_mm": "{:.2f}", "RMSE": "{:.5f}"
+                }),
+                use_container_width=True
+            )
+
+        with t_tab4:
+            fig_bar = go.Figure()
+            fig_bar.add_trace(go.Bar(x=df_res["TOCKA"], y=df_res["de_mm"], name="Δe [mm] (Vzhod)", marker_color="#0284c7"))
+            fig_bar.add_trace(go.Bar(x=df_res["TOCKA"], y=df_res["dn_mm"], name="Δn [mm] (Sever)", marker_color="#10b981"))
+            fig_bar.add_trace(go.Bar(x=df_res["TOCKA"], y=df_res["dh_mm"], name="Δh [mm] (Višina)", marker_color="#f59e0b"))
+            fig_bar.update_layout(
+                title="Komponente odstopanj po točkah (Δe, Δn, Δh v milimetrih)",
+                barmode="group",
+                xaxis_title="Geodetska točka",
+                yaxis_title="Odstopanje [mm]",
+                legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+                template="plotly_white",
+                height=450
+            )
+            st.plotly_chart(fig_bar, use_container_width=True)
+
+            fig_vec = go.Figure()
+            fig_vec.add_trace(go.Scatter(
+                x=df_res["e1"], y=df_res["n1"],
+                mode="markers+text",
+                text=df_res["TOCKA"],
+                textposition="top center",
+                marker=dict(size=10, color="#2563eb"),
+                name="Položaj točk (D96/TM)"
+            ))
+            scale_arrow = 50.0
+            for _, r in df_res.iterrows():
+                fig_vec.add_annotation(
+                    x=r["e1"] + r["de_m"] * scale_arrow,
+                    y=r["n1"] + r["dn_m"] * scale_arrow,
+                    ax=r["e1"],
+                    ay=r["n1"],
+                    xref="x", yref="y", axref="x", ayref="y",
+                    showarrow=True,
+                    arrowhead=2,
+                    arrowsize=1.2,
+                    arrowwidth=2,
+                    arrowcolor="#dc2626"
+                )
+            fig_vec.update_layout(
+                title=f"Ravninski položaj točk v D96/TM in vektorji odstopanj (povečani {scale_arrow:.0f}×)",
+                xaxis_title="D96/TM Vzhod e [m]",
+                yaxis_title="D96/TM Sever n [m]",
+                template="plotly_white",
+                height=500
+            )
+            st.plotly_chart(fig_vec, use_container_width=True)
+
+        st.markdown("#### 📄 Predogled generiranega poročila (.txt)")
+        st.code(rep_text, language="text")
+
+        c_d1, c_d2, c_d3 = st.columns(3)
+        with c_d1:
+            st.download_button(
+                "💾 Prenesi novo .txt datoteko s koordinatami in odstopanji",
+                data=rep_text.encode("utf-8"),
+                file_name="Primerjava_Koordinat_Odstopanja.txt",
+                mime="text/plain",
+                type="primary",
+                use_container_width=True
+            )
+        with c_d2:
+            csv_data = df_res.to_csv(index=False).encode("utf-8")
+            st.download_button(
+                "📊 Prenesi odstopanja v CSV",
+                data=csv_data,
+                file_name="Primerjava_Koordinat_Odstopanja.csv",
+                mime="text/csv",
+                use_container_width=True
+            )
+        with c_d3:
+            excel_comp = io.BytesIO()
+            with pd.ExcelWriter(excel_comp, engine="openpyxl") as writer:
+                df_res.to_excel(writer, sheet_name="Odstopanja_Tocke", index=False)
+                df_st.to_excel(writer, sheet_name="Statistika_RMSE", index=False)
+            st.download_button(
+                "📗 Prenesi Excel (.xlsx)",
+                data=excel_comp.getvalue(),
+                file_name="Primerjava_Koordinat_Odstopanja.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                use_container_width=True
+            )
+
+
+
+# =========================================================================
+# ZAVIHEK 5: TEHNIČNO POROČILO IN IZVOZ TABEL (VAJA 3)
+# =========================================================================
+
 def render_satelitska_vaja3_module(current_user: dict):
     init_vaja3_session()
     root_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -1768,299 +2074,7 @@ def render_satelitska_vaja3_module(current_user: dict):
     # ZAVIHEK 4: PRIMERJAVA KOORDINAT MED DVEMA .TXT DATOTEKAMA (ODSTOPANJA)
     # =========================================================================
     with tab4:
-        st.subheader("📊 4️⃣ Primerjava koordinat med dvema .txt datotekama in izpis odstopanj")
-        st.markdown("""
-        To orodje omogoča natančno medsebojno primerjavo poljubnih dveh koordinatnih datotek (`.txt` ali `.crd`), npr.:
-        - **Datoteka 1:** Izravnane PPP koordinate v ITRF2020 ali transformirane ETRF2000 (iz poročil MNK).
-        - **Datoteka 2:** Uradne referenčne koordinate (npr. `D96_17.txt` / Bernese / ITRS-SI / EPN).
-        
-        Za vsako ujemajočo se točko program samodejno:
-        1. Izračuna **kartezična prostorska odstopanja (ECEF)**: $\Delta X, \Delta Y, \Delta Z$ in celoten 3D vektor $\Delta D_{3D} = \sqrt{\Delta X^2 + \Delta Y^2 + \Delta Z^2}$ v [m] in [mm].
-        2. Pretvori koordinate na **elipsoid GRS80** in v državno **D96/TM projekcijo** ter izračuna: $\Delta e, \Delta n, \Delta h, \Delta H$, horizontalni 2D vektor $\Delta s_{2D} = \sqrt{\Delta e^2 + \Delta n^2}$ in smerni kot (azimut $\theta$).
-        3. Pripravi **popolno statistično oceno**: Min, Max, Povprečje (Mean), Standardni odklon (Std) in Srednji kvadratni pogrešek (RMSE).
-        4. **Samodejno shrani poročilo na disk** v `Primerjava_Koordinat_Odstopanja.txt` ter ponudi prenos (`.txt`, `.csv`, `.xlsx`).
-        """)
-
-        scanned = scan_workspace_coordinate_files(root_dir)
-        scanned_options = {s[0]: s[2] for s in scanned}
-
-        st.markdown("---")
-        cq1, cq2 = st.columns([1.5, 2])
-        with cq1:
-            load_defaults = st.button("⚡ 1-Klik: Naloži privzeti datoteki (D96_17.txt in Izravnane_Koordinate_ITRF2020)", type="secondary", use_container_width=True)
-
-        cf1, cf2 = st.columns(2)
-        with cf1:
-            st.markdown("##### 📁 Datoteka 1 (Vhod 1 — npr. D96_17 ali referenca)")
-            f1_upload = st.file_uploader("Naložite Datoteko 1 (.txt, .crd):", type=["txt", "crd", "dat"], key="v3_comp_up1")
-            opt_list1 = ["-- Ročno naložena datoteka --"] + list(scanned_options.keys())
-            def_idx1 = 0
-            for idx, k in enumerate(opt_list1):
-                if "D96_17.txt" in k:
-                    def_idx1 = idx
-                    break
-            sel_ws_1 = st.selectbox("Ali izberite iz delovne mape (Datoteka 1):", options=opt_list1, index=def_idx1, key="v3_comp_ws1")
-
-        with cf2:
-            st.markdown("##### 📁 Datoteka 2 (Vhod 2 — npr. Izravnane koordinate ITRF2020)")
-            f2_upload = st.file_uploader("Naložite Datoteko 2 (.txt, .crd):", type=["txt", "crd", "dat"], key="v3_comp_up2")
-            opt_list2 = ["-- Ročno naložena datoteka --"] + list(scanned_options.keys())
-            def_idx2 = 0
-            for idx, k in enumerate(opt_list2):
-                if "Izravnane" in k:
-                    def_idx2 = idx
-                    break
-            sel_ws_2 = st.selectbox("Ali izberite iz delovne mape (Datoteka 2):", options=opt_list2, index=def_idx2, key="v3_comp_ws2")
-
-        c_opt1, c_opt2 = st.columns(2)
-        with c_opt1:
-            mode_sub = st.radio(
-                "Smer odštevanja razlik (Δ):",
-                [
-                    "Δ = Datoteka 1 - Datoteka 2 (npr. D96_17 - ITRF2020)",
-                    "Δ = Datoteka 2 - Datoteka 1 (npr. ITRF2020 - D96_17)"
-                ],
-                index=0,
-                key="v3_comp_mode_sub"
-            )
-        with c_opt2:
-            sort_pts = st.selectbox(
-                "Razvrščanje točk v tabeli in poročilu:",
-                ["Vrstni red v Datoteki 1", "Vrstni red v Datoteki 2", "Po abecedi točk (A-Ž)"],
-                index=0,
-                key="v3_comp_sort_by"
-            )
-
-        btn_run = st.button("🚀 Izvedi primerjavo koordinat in izračun odstopanj", type="primary", use_container_width=True)
-
-        if load_defaults or btn_run:
-            src1 = None
-            label1 = "Datoteka 1"
-            if load_defaults:
-                d96_cand = os.path.join(root_dir, "D96_17.txt")
-                if os.path.exists(d96_cand):
-                    src1 = d96_cand
-                    label1 = "D96_17.txt"
-            elif f1_upload is not None:
-                src1 = f1_upload
-                label1 = f1_upload.name
-            elif sel_ws_1 != "-- Ročno naložena datoteka --" and sel_ws_1 in scanned_options:
-                src1 = scanned_options[sel_ws_1]
-                label1 = sel_ws_1
-
-            src2 = None
-            label2 = "Datoteka 2"
-            if load_defaults:
-                for cand_fn in ["Izravnane_Koordinate_in_Odkloni_ITRF2020 (3).txt", "Izravnane_Koordinate_in_Odkloni_ITRF2020.txt"]:
-                    cand_path = os.path.join(root_dir, cand_fn)
-                    if os.path.exists(cand_path):
-                        src2 = cand_path
-                        label2 = cand_fn
-                        break
-            elif f2_upload is not None:
-                src2 = f2_upload
-                label2 = f2_upload.name
-            elif sel_ws_2 != "-- Ročno naložena datoteka --" and sel_ws_2 in scanned_options:
-                src2 = scanned_options[sel_ws_2]
-                label2 = sel_ws_2
-
-            if not src1 or not src2:
-                st.error("Prosimo, izberite ali naložite obe datoteki (Datoteka 1 in Datoteka 2)!")
-            else:
-                p1_list, fmt1 = parse_coordinate_txt(src1)
-                p2_list, fmt2 = parse_coordinate_txt(src2)
-
-                if not p1_list:
-                    st.error(f"V Datoteki 1 ({label1}) ni bilo najdenih veljavnih točk s koordinatami X, Y, Z.")
-                elif not p2_list:
-                    st.error(f"V Datoteki 2 ({label2}) ni bilo najdenih veljavnih točk s koordinatami X, Y, Z.")
-                else:
-                    df_comp, df_stats, msg = compare_two_coordinate_files(
-                        p1_list, p2_list, mode_subtraction=mode_sub, sort_by=sort_pts
-                    )
-                    if df_comp.empty:
-                        st.error(msg)
-                    else:
-                        rep_txt = generate_comparison_report_txt(
-                            df_comp, df_stats, label1, label2, mode_sub, fmt1, fmt2
-                        )
-                        st.session_state.v3_comp_df_result = df_comp
-                        st.session_state.v3_comp_df_stats = df_stats
-                        st.session_state.v3_comp_report_txt = rep_txt
-                        st.session_state.v3_comp_label1 = label1
-                        st.session_state.v3_comp_label2 = label2
-                        st.session_state.v3_comp_fmt1 = fmt1
-                        st.session_state.v3_comp_fmt2 = fmt2
-
-                        out_local = os.path.join(root_dir, "Primerjava_Koordinat_Odstopanja.txt")
-                        try:
-                            with open(out_local, "w", encoding="utf-8") as f_out:
-                                f_out.write(rep_txt)
-                            st.session_state.v3_comp_saved_file = out_local
-                        except Exception:
-                            st.session_state.v3_comp_saved_file = None
-
-                        st.success(f"✅ {msg}")
-
-        if "v3_comp_df_result" in st.session_state and not st.session_state.v3_comp_df_result.empty:
-            df_res = st.session_state.v3_comp_df_result
-            df_st = st.session_state.v3_comp_df_stats
-            rep_text = st.session_state.v3_comp_report_txt
-            saved_f = st.session_state.get("v3_comp_saved_file")
-
-            if saved_f:
-                st.info(f"💾 Poročilo je bilo samodejno shranjeno v lokalno delovno mapo: `{saved_f}`")
-
-            st.markdown("---")
-            m1, m2, m3, m4, m5 = st.columns(5)
-            with m1:
-                st.metric("Skupne točke", f"{len(df_res)}")
-            with m2:
-                max_s2d = df_res["ds_2D_mm"].max()
-                st.metric("Max Δs_2D", f"{max_s2d:.1f} mm")
-            with m3:
-                rmse_s2d = df_st[df_st["Komponenta"] == "ds_2D_m"]["RMSE_mm"].values[0]
-                st.metric("RMSE Δs_2D", f"{rmse_s2d:.1f} mm")
-            with m4:
-                rmse_dh = df_st[df_st["Komponenta"] == "dh_m"]["RMSE_mm"].values[0]
-                st.metric("RMSE Δh", f"{rmse_dh:.1f} mm")
-            with m5:
-                rmse_3d = df_st[df_st["Komponenta"] == "dD_3D_m"]["RMSE_mm"].values[0]
-                st.metric("RMSE ΔD_3D", f"{rmse_3d:.1f} mm")
-
-            t_tab1, t_tab2, t_tab3, t_tab4 = st.tabs([
-                "📐 1. ECEF Kartezične razlike (XYZ)",
-                "🗺️ 2. D96/TM Ravninska & Višinska odstopanja",
-                "📈 3. Statistični povzetek (Min, Max, RMSE)",
-                "📊 4. Interaktivni grafi odstopanj"
-            ])
-
-            with t_tab1:
-                st.dataframe(
-                    df_res[[
-                        "TOCKA", "X1", "Y1", "Z1", "X2", "Y2", "Z2",
-                        "dX_m", "dY_m", "dZ_m", "dD_3D_m",
-                        "dX_mm", "dY_mm", "dZ_mm", "dD_3D_mm"
-                    ]].style.format({
-                        "X1": "{:.4f}", "Y1": "{:.4f}", "Z1": "{:.4f}",
-                        "X2": "{:.4f}", "Y2": "{:.4f}", "Z2": "{:.4f}",
-                        "dX_m": "{:+.4f}", "dY_m": "{:+.4f}", "dZ_m": "{:+.4f}", "dD_3D_m": "{:.4f}",
-                        "dX_mm": "{:+.1f}", "dY_mm": "{:+.1f}", "dZ_mm": "{:+.1f}", "dD_3D_mm": "{:.1f}"
-                    }),
-                    use_container_width=True
-                )
-
-            with t_tab2:
-                st.dataframe(
-                    df_res[[
-                        "TOCKA", "e1", "n1", "h1", "H1", "e2", "n2", "h2", "H2",
-                        "de_m", "dn_m", "dh_m", "dH_m", "ds_2D_m",
-                        "de_mm", "dn_mm", "dh_mm", "dH_mm", "ds_2D_mm", "azimut_deg"
-                    ]].style.format({
-                        "e1": "{:.4f}", "n1": "{:.4f}", "h1": "{:.4f}", "H1": "{:.4f}",
-                        "e2": "{:.4f}", "n2": "{:.4f}", "h2": "{:.4f}", "H2": "{:.4f}",
-                        "de_m": "{:+.4f}", "dn_m": "{:+.4f}", "dh_m": "{:+.4f}", "dH_m": "{:+.4f}", "ds_2D_m": "{:.4f}",
-                        "de_mm": "{:+.1f}", "dn_mm": "{:+.1f}", "dh_mm": "{:+.1f}", "dH_mm": "{:+.1f}", "ds_2D_mm": "{:.1f}",
-                        "azimut_deg": "{:.2f}°"
-                    }),
-                    use_container_width=True
-                )
-
-            with t_tab3:
-                st.dataframe(
-                    df_st[[
-                        "Oznaka", "Min_mm", "Max_mm", "Mean_mm", "Std_mm", "RMSE_mm", "RMSE"
-                    ]].style.format({
-                        "Min_mm": "{:+.2f}", "Max_mm": "{:+.2f}", "Mean_mm": "{:+.2f}",
-                        "Std_mm": "{:.2f}", "RMSE_mm": "{:.2f}", "RMSE": "{:.5f}"
-                    }),
-                    use_container_width=True
-                )
-
-            with t_tab4:
-                fig_bar = go.Figure()
-                fig_bar.add_trace(go.Bar(x=df_res["TOCKA"], y=df_res["de_mm"], name="Δe [mm] (Vzhod)", marker_color="#0284c7"))
-                fig_bar.add_trace(go.Bar(x=df_res["TOCKA"], y=df_res["dn_mm"], name="Δn [mm] (Sever)", marker_color="#10b981"))
-                fig_bar.add_trace(go.Bar(x=df_res["TOCKA"], y=df_res["dh_mm"], name="Δh [mm] (Višina)", marker_color="#f59e0b"))
-                fig_bar.update_layout(
-                    title="Komponente odstopanj po točkah (Δe, Δn, Δh v milimetrih)",
-                    barmode="group",
-                    xaxis_title="Geodetska točka",
-                    yaxis_title="Odstopanje [mm]",
-                    legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
-                    template="plotly_white",
-                    height=450
-                )
-                st.plotly_chart(fig_bar, use_container_width=True)
-
-                fig_vec = go.Figure()
-                fig_vec.add_trace(go.Scatter(
-                    x=df_res["e1"], y=df_res["n1"],
-                    mode="markers+text",
-                    text=df_res["TOCKA"],
-                    textposition="top center",
-                    marker=dict(size=10, color="#2563eb"),
-                    name="Položaj točk (D96/TM)"
-                ))
-                scale_arrow = 50.0
-                for _, r in df_res.iterrows():
-                    fig_vec.add_annotation(
-                        x=r["e1"] + r["de_m"] * scale_arrow,
-                        y=r["n1"] + r["dn_m"] * scale_arrow,
-                        ax=r["e1"],
-                        ay=r["n1"],
-                        xref="x", yref="y", axref="x", ayref="y",
-                        showarrow=True,
-                        arrowhead=2,
-                        arrowsize=1.2,
-                        arrowwidth=2,
-                        arrowcolor="#dc2626"
-                    )
-                fig_vec.update_layout(
-                    title=f"Ravninski položaj točk v D96/TM in vektorji odstopanj (povečani {scale_arrow:.0f}×)",
-                    xaxis_title="D96/TM Vzhod e [m]",
-                    yaxis_title="D96/TM Sever n [m]",
-                    template="plotly_white",
-                    height=500
-                )
-                st.plotly_chart(fig_vec, use_container_width=True)
-
-            st.markdown("#### 📄 Predogled generiranega poročila (.txt)")
-            st.code(rep_text, language="text")
-
-            c_d1, c_d2, c_d3 = st.columns(3)
-            with c_d1:
-                st.download_button(
-                    "💾 Prenesi novo .txt datoteko s koordinatami in odstopanji",
-                    data=rep_text.encode("utf-8"),
-                    file_name="Primerjava_Koordinat_Odstopanja.txt",
-                    mime="text/plain",
-                    type="primary",
-                    use_container_width=True
-                )
-            with c_d2:
-                csv_data = df_res.to_csv(index=False).encode("utf-8")
-                st.download_button(
-                    "📊 Prenesi odstopanja v CSV",
-                    data=csv_data,
-                    file_name="Primerjava_Koordinat_Odstopanja.csv",
-                    mime="text/csv",
-                    use_container_width=True
-                )
-            with c_d3:
-                excel_comp = io.BytesIO()
-                with pd.ExcelWriter(excel_comp, engine="openpyxl") as writer:
-                    df_res.to_excel(writer, sheet_name="Odstopanja_Tocke", index=False)
-                    df_st.to_excel(writer, sheet_name="Statistika_RMSE", index=False)
-                st.download_button(
-                    "📗 Prenesi Excel (.xlsx)",
-                    data=excel_comp.getvalue(),
-                    file_name="Primerjava_Koordinat_Odstopanja.xlsx",
-                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                    use_container_width=True
-                )
-
-
+        render_primerjava_koordinat_tab(root_dir)
 
     # =========================================================================
     # ZAVIHEK 5: TEHNIČNO POROČILO IN IZVOZ TABEL (VAJA 3)
