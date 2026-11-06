@@ -129,6 +129,32 @@ else:
     display_name = current_user.get("display_name", username)
     role = current_user.get("role", "Študent / Geodet")
 
+    MODULI_SEZNAM = [
+        "📐 1. Izravnalni račun in analiza mrež (MNK & gPPP)",
+        "🛰️ 2. Satelitska geodezija (Vaja 3)",
+        "📊 3. Primerjava koordinat med dvema .txt datotekama",
+        "🗺️ 4. Izravnava 1D/2D mrež iz meritev (Beta)",
+        "🔄 5. Koordinatne transformacije D48/GK ⇄ D96/TM (Beta)",
+        "📈 6. Deformacijska analiza in premiki (Beta)"
+    ]
+
+    if "app_selected_module" not in st.session_state or st.session_state["app_selected_module"] not in MODULI_SEZNAM:
+        st.session_state["app_selected_module"] = MODULI_SEZNAM[0]
+    if "sb_geodetic_module_select" not in st.session_state or st.session_state["sb_geodetic_module_select"] not in MODULI_SEZNAM:
+        st.session_state["sb_geodetic_module_select"] = st.session_state["app_selected_module"]
+    if "main_geodetic_module_radio" not in st.session_state or st.session_state["main_geodetic_module_radio"] not in MODULI_SEZNAM:
+        st.session_state["main_geodetic_module_radio"] = st.session_state["app_selected_module"]
+
+    def _on_sidebar_module_change():
+        izb = st.session_state["sb_geodetic_module_select"]
+        st.session_state["app_selected_module"] = izb
+        st.session_state["main_geodetic_module_radio"] = izb
+
+    def _on_main_module_change():
+        izb = st.session_state["main_geodetic_module_radio"]
+        st.session_state["app_selected_module"] = izb
+        st.session_state["sb_geodetic_module_select"] = izb
+
     # =============================================================================
     # STRANSKA VRSTICA (SIDEBAR): UPORABNIK, MODULI IN HITRA DEJANJA
     # =============================================================================
@@ -202,30 +228,12 @@ else:
 
         # IZBIRA GEODETSKEGA PODPROGRAMA (MODULA)
         st.markdown("### 🧭 Geodetski Moduli")
-        MODULI_SEZNAM = [
-            "📐 1. Izravnalni račun in analiza mrež (MNK & gPPP)",
-            "🛰️ 2. Satelitska geodezija (Vaja 3)",
-            "📊 3. Primerjava koordinat med dvema .txt datotekama",
-            "🗺️ 4. Izravnava 1D/2D mrež iz meritev (Beta)",
-            "🔄 5. Koordinatne transformacije D48/GK ⇄ D96/TM (Beta)",
-            "📈 6. Deformacijska analiza in premiki (Beta)"
-        ]
-        if "app_selected_module" not in st.session_state:
-            st.session_state["app_selected_module"] = MODULI_SEZNAM[0]
-
-        curr_sb_idx = 0
-        if st.session_state["app_selected_module"] in MODULI_SEZNAM:
-            curr_sb_idx = MODULI_SEZNAM.index(st.session_state["app_selected_module"])
-
-        izbrani_sidebar = st.selectbox(
+        st.selectbox(
             "Izbira geodetskega podprograma:",
             MODULI_SEZNAM,
-            index=curr_sb_idx,
-            key="sb_geodetic_module_select"
+            key="sb_geodetic_module_select",
+            on_change=_on_sidebar_module_change
         )
-        if izbrani_sidebar != st.session_state["app_selected_module"]:
-            st.session_state["app_selected_module"] = izbrani_sidebar
-            st.rerun()
 
         izbrani_modul = st.session_state["app_selected_module"]
 
@@ -263,7 +271,7 @@ else:
                 if mnk_izravnava.izvedi_izravnavo_jedro():
                     st.success("Izravnava uspešno izvedena! Rezultati so v zavihkih 3 in 4.")
 
-        st.sidebar.caption("🟢 **Geodetski Studio v2.5** (Vaja 3 & Primerjava .txt aktivna)")
+        st.sidebar.caption("🟢 **Geodetski Studio v2.6** (Vaja 3 & Primerjava .txt aktivna)")
 
         # Prikaz geodetske referenčne literature (viri)
         seznam_virov = preveri_in_pridobi_vire()
@@ -285,7 +293,7 @@ else:
         <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap;">
             <h2 style="margin: 0; color: white;">📐 GEODETSKI STUDIO — MULTI-MODULARNA PLATFORMA</h2>
             <span style="background-color: #10b981; color: white; padding: 4px 12px; border-radius: 6px; font-size: 0.82rem; font-weight: 700; letter-spacing: 0.5px; box-shadow: 0 2px 6px rgba(0,0,0,0.2);">
-                v2.5 (Vaja 3 & Primerjava .txt)
+                v2.6 (Vaja 3 & Primerjava .txt)
             </span>
         </div>
         <p style="margin-top: 6px; color: #bfdbfe;">
@@ -305,18 +313,14 @@ else:
     </div>
     """, unsafe_allow_html=True)
 
-    curr_main_idx = MODULI_SEZNAM.index(st.session_state["app_selected_module"]) if st.session_state["app_selected_module"] in MODULI_SEZNAM else 0
-    izbrani_main = st.radio(
+    st.radio(
         "Glavna navigacija po modulih:",
         MODULI_SEZNAM,
-        index=curr_main_idx,
         horizontal=True,
         key="main_geodetic_module_radio",
+        on_change=_on_main_module_change,
         label_visibility="collapsed"
     )
-    if izbrani_main != st.session_state["app_selected_module"]:
-        st.session_state["app_selected_module"] = izbrani_main
-        st.rerun()
 
     active_module = st.session_state["app_selected_module"]
     st.markdown("---")
