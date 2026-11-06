@@ -6,5 +6,13 @@
     "salt": "bbb631947e81798914e3cd7e13ab7eac",
     "hash": "e1e58752951eaa52f0318d1012399a7544860a3a81b208c1a11ad6fde1b265f0",
     "created_at": "2026-11-06 08:45:13"
+  },
+  "timon_mofa": {
+    "username": "timon_mofa",
+    "display_name": "Timon Šak Novšak, dipl. univ. inž. geod.",
+    "role": "Študent geodezije (FGG / magistrski študij)",
+    "salt": "56e9ef2f174191093a2582667d0cb020",
+    "hash": "624ebde7c178c4b8bc3a69ae6a7de988ed0c002f1b037999dc066cd80fef3051",
+    "created_at": "2026-11-06 08:45:45"
   }
 }
