@@ -1,1 +1,10 @@
-{}
+{
+  "zan123": {
+    "username": "Zan123",
+    "display_name": "Žan Rezar Lesnik",
+    "role": "Študent geodezije (FGG / magistrski študij)",
+    "salt": "b6cb14ef6bf82f0aecabd337566583dc",
+    "hash": "7268cda8b6cce05303e5e537f792c78e84ea58267262f4cde693c2d829c6b036",
+    "created_at": "2026-11-06 08:36:16"
+  }
+}
