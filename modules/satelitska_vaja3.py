@@ -2,6 +2,8 @@ import os
 import re
 import io
 import json
+import struct
+import hashlib
 import subprocess
 from datetime import datetime, timedelta
 import numpy as np
@@ -164,41 +166,105 @@ def deg_to_dms_str(deg_val: float, decimals: int = 5) -> str:
 # =============================================================================
 # 3. MODEL GEOIDA SLO-VRP2016/Koper IN MODEL HITROSTI SLO4D (V2.0, MAREC 2026)
 # =============================================================================
+_SLO_VRP2016_GRID_CACHE = None
+
+
+def _load_slo_vrp2016_grid():
+    """
+    Naloži uradno mrežo slovenskega kvazigeoida SLO_VRP2016/Koper iz mape
+    `PretvorbeMedKoordinatami/` (SLO_VRP2016_Koper.npz, SLOVRP2016-Koper.GEM ali HREF_SVS2010.mat).
+    Mreža ima dimenzijo (241, 321):
+      - φ od 45.0° do 47.0° N (korak Δφ = 30'' = 1/120°)
+      - λ od 13.0° do 17.0° E (korak Δλ = 45'' = 1/80°)
+    Vrne 2D NumPy polje oblike (241, 321) v float64 ali None, če datotek ni.
+    """
+    global _SLO_VRP2016_GRID_CACHE
+    if _SLO_VRP2016_GRID_CACHE is not None:
+        return _SLO_VRP2016_GRID_CACHE
+
+    root_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    conv_dir = os.path.join(root_dir, "PretvorbeMedKoordinatami")
+
+    npz_path = os.path.join(conv_dir, "SLO_VRP2016_Koper.npz")
+    if os.path.exists(npz_path):
+        try:
+            with np.load(npz_path) as data_npz:
+                if "grid_gem" in data_npz:
+                    grid = np.asarray(data_npz["grid_gem"], dtype=np.float64)
+                    if grid.shape == (241, 321):
+                        _SLO_VRP2016_GRID_CACHE = grid
+                        return _SLO_VRP2016_GRID_CACHE
+        except Exception:
+            pass
+
+    gem_path = os.path.join(conv_dir, "SLOVRP2016-Koper.GEM")
+    if os.path.exists(gem_path):
+        try:
+            with open(gem_path, "rb") as f:
+                raw = f.read()
+            expected_bytes = 165 + 241 * 321 * 2
+            if len(raw) >= expected_bytes:
+                arr_i2 = np.frombuffer(raw[165:expected_bytes], dtype="<i2").reshape(241, 321)
+                grid = 46.3821 + arr_i2.astype(np.float64) / 1000.0
+                _SLO_VRP2016_GRID_CACHE = grid
+                return _SLO_VRP2016_GRID_CACHE
+        except Exception:
+            pass
+
+    mat_path = os.path.join(conv_dir, "HREF_SVS2010.mat")
+    if os.path.exists(mat_path):
+        try:
+            import scipy.io as sio
+            mat_data = sio.loadmat(mat_path)
+            if "HREF_SVS2010" in mat_data:
+                grid = np.asarray(mat_data["HREF_SVS2010"][::-1, :], dtype=np.float64)
+                if grid.shape == (241, 321):
+                    _SLO_VRP2016_GRID_CACHE = grid
+                    return _SLO_VRP2016_GRID_CACHE
+        except Exception:
+            pass
+
+    return None
+
+
 def estimate_geoid_slo_vrp2016_koper(lat_deg: float, lon_deg: float, point_name: str = "") -> float:
     """
-    Vrne višino kvazigeoida (undulacijo N) po državnem modelu SLO-VRP2016/Koper [m].
-    Vključuje umerjene vrednosti za referenčne točke FGG / SIGNAL ter gladko ploskev za Slovenijo.
-    Uporabnik lahko vrednost N v tabeli kadarkoli tudi ročno uredi.
+    Vrne višinsko anomalijo / undulacijo kvazigeoida ζ (N_geoid) po uradnem državnem modelu
+    SLO-VRP2016/Koper [m] za uporabo pri višinskem sistemu SVS2010 (Datum Koper): H = h - ζ.
+    Izvede eksaktno bilinearno interpolacijo na uradni mreži (45°–47° N, 13°–17° E, korak 30'' × 45'').
     """
-    known_undulations = {
-        "FGG2": 46.7900,
-        "FGG": 46.7900,
-        "GSR1": 46.7920,
-        "LJUB": 46.7900,
-        "BODO": 45.7360,
-        "BOVC": 48.0340,
-        "BRZC": 45.5780,
-        "CELJ": 46.5710,
-        "CRNM": 45.6420,
-    }
-    clean_name = str(point_name).strip().upper()
-    for k, v in known_undulations.items():
-        if clean_name == k or clean_name.startswith(k):
-            return v
+    grid = _load_slo_vrp2016_grid()
+    if grid is not None:
+        fi = float(np.clip(float(lat_deg), 45.0, 47.0))
+        la = float(np.clip(float(lon_deg), 13.0, 17.0))
 
-    # Regionalna aproksimacija ploskve SLO-VRP2016/Koper za območje Slovenije (45° < fi < 47°, 13° < la < 17°)
-    # Umerjena na kontrolne točke (Koper ~45.85 m, Bovec ~48.03 m, Ljubljana ~46.79 m, Bodonci ~45.74 m)
-    dfi = lat_deg - 46.0425
-    dla = lon_deg - 14.4886
-    N_est = (
-        46.7900
-        + 0.420 * dfi
-        - 0.880 * dla
-        - 0.150 * (dfi ** 2)
-        - 0.110 * (dla ** 2)
-        + 0.220 * dfi * dla
-    )
-    return float(np.clip(N_est, 42.157, 50.608))
+        # Korak mreže: Δφ = 30'' = 1/120°, Δλ = 45'' = 1/80°
+        ri = (fi - 45.0) * 120.0
+        ci = (la - 13.0) * 80.0
+
+        i0 = min(max(int(np.floor(ri)), 0), 239)
+        j0 = min(max(int(np.floor(ci)), 0), 319)
+        di = ri - i0
+        dj = ci - j0
+
+        z00 = grid[i0, j0]
+        z10 = grid[i0 + 1, j0]
+        z01 = grid[i0, j0 + 1]
+        z11 = grid[i0 + 1, j0 + 1]
+
+        zeta = (
+            (1.0 - di) * (1.0 - dj) * z00
+            + di * (1.0 - dj) * z10
+            + (1.0 - di) * dj * z01
+            + di * dj * z11
+        )
+        return float(zeta)
+
+    # Rezervna gladka ploskev SLO-VRP2016/Koper (le če nobena mrežna datoteka ni dostopna)
+    dfi = float(lat_deg) - 46.0457
+    dla = float(lon_deg) - 14.4945
+    zeta_est = 46.4763 + 0.420 * dfi - 0.880 * dla - 0.150 * (dfi ** 2) - 0.110 * (dla ** 2) + 0.220 * dfi * dla
+    return float(np.clip(zeta_est, 42.157, 50.608))
 
 
 def estimate_slo4d_velocity_etrf2000(lat_deg: float, lon_deg: float, point_name: str = ""):
@@ -411,6 +477,67 @@ def parse_mnk_report_txt(content: str, filename: str = "Tocka.txt") -> dict:
     }
 
 
+def parse_combined_itrf_txt(content: str, filename: str = "Izravnane_Koordinate.txt") -> list:
+    """
+    Izlušči združeno tabelo točk (npr. `Izravnane_Koordinate_in_Odkloni_ITRF2020 (3).txt`),
+    kjer vsaka vrstica vsebuje: TOCKA X Y Z sX_pri sY_pri sZ_pri sX_post sY_post sZ_post.
+    Vrne seznam slovarjev v enaki obliki kot `parse_mnk_report_txt`.
+    """
+    rows = []
+    for line in content.splitlines():
+        s = line.strip()
+        if not s or s.startswith("#"):
+            continue
+        toks = s.split()
+        if len(toks) < 4:
+            continue
+        try:
+            # Podpora tako za obliko "FGG1 X Y Z ..." kot "1 FGG1 X Y Z ..."
+            if toks[0].isdigit() and len(toks) >= 5:
+                pt = toks[1].strip()
+                vals = [float(t) for t in toks[2:]]
+            else:
+                pt = toks[0].strip()
+                vals = [float(t) for t in toks[1:]]
+        except ValueError:
+            continue
+
+        if len(vals) < 3 or abs(vals[0]) < 1e5:
+            continue
+
+        xv, yv, zv = vals[0], vals[1], vals[2]
+        sx_pri = vals[3] if len(vals) > 3 else 0.0
+        sy_pri = vals[4] if len(vals) > 4 else 0.0
+        sz_pri = vals[5] if len(vals) > 5 else 0.0
+        sx_post = vals[6] if len(vals) > 6 else sx_pri
+        sy_post = vals[7] if len(vals) > 7 else sy_pri
+        sz_post = vals[8] if len(vals) > 8 else sz_pri
+
+        rows.append({
+            "Točka": pt,
+            "X_6dec": xv,
+            "Y_6dec": yv,
+            "Z_6dec": zv,
+            "X_5dec": round(xv, 5),
+            "Y_5dec": round(yv, 5),
+            "Z_5dec": round(zv, 5),
+            "X [m]": xv,
+            "Y [m]": yv,
+            "Z [m]": zv,
+            "σ_X (priori) [m]": sx_pri,
+            "σ_Y (priori) [m]": sy_pri,
+            "σ_Z (priori) [m]": sz_pri,
+            "σ̂_X (post.) [m]": sx_post,
+            "σ̂_Y (post.) [m]": sy_post,
+            "σ̂_Z (post.) [m]": sz_post,
+            "±CI_X [m]": round(1.96 * sx_post, 5),
+            "±CI_Y [m]": round(1.96 * sy_post, 5),
+            "±CI_Z [m]": round(1.96 * sz_post, 5),
+            "Vir": filename,
+        })
+    return rows
+
+
 def mjd_to_epoch_details(mjd_day: float, mjd_sec: float = 0.0) -> dict:
     """
     Pretvori MJD (dnevi in sekunde dneva) v:
@@ -505,6 +632,71 @@ def run_crdcon_exe_verification(df_xyz: pd.DataFrame) -> dict:
         }
     except Exception as e:
         return {"available": False, "error": str(e)}
+
+
+def convert_xyz_batch_crdcon_or_python(xyz_records: list) -> list:
+    """
+    Hibridna pretvorba seznama koordinat [(X, Y, Z), ...] v (φ [°], λ [°], h [m], e [m], n [m]):
+    - Na Windows, kjer je na voljo uradni `PretvorbeMedKoordinatami/CrdCon.exe`, izvede pretvorbo
+      neposredno z uradnim programom `CrdCon.exe` (-eGRS80 -pp0.000001).
+    - Na Linuxu (npr. Streamlit Cloud) ali ob napaki samodejno uporabi Python motor
+      `xyz_to_flh_grs80` + `fl_to_en_d96tm`, ki se z `CrdCon.exe` ujema do < 0.001 mm.
+    """
+    if not xyz_records:
+        return []
+
+    root_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    exe_path = os.path.join(root_dir, "PretvorbeMedKoordinatami", "CrdCon.exe")
+
+    if os.name == "nt" and os.path.exists(exe_path):
+        try:
+            in_lines = []
+            for idx, (xv, yv, zv) in enumerate(xyz_records):
+                in_lines.append(f"P{idx:05d} {float(xv):18.8f} {float(yv):18.8f} {float(zv):18.8f}")
+            input_str = "\n".join(in_lines) + "\n"
+
+            proc_flh = subprocess.run(
+                [exe_path, "-icXYZ", "-ocFLH", "-goDEG", "-eGRS80", "-pp0.000001", "-ptname=yes"],
+                input=input_str, text=True, capture_output=True, timeout=10
+            )
+            proc_enh = subprocess.run(
+                [exe_path, "-icXYZ", "-ocYXH", "-eGRS80", "-pp0.000001", "-ptname=yes"],
+                input=input_str, text=True, capture_output=True, timeout=10
+            )
+
+            flh_rows = []
+            for ln in proc_flh.stdout.splitlines():
+                s = ln.strip()
+                if not s or s.startswith("#"):
+                    continue
+                toks = s.split()
+                if len(toks) >= 4:
+                    flh_rows.append((float(toks[1]), float(toks[2]), float(toks[3])))
+
+            enh_rows = []
+            for ln in proc_enh.stdout.splitlines():
+                s = ln.strip()
+                if not s or s.startswith("#"):
+                    continue
+                toks = s.split()
+                if len(toks) >= 4:
+                    enh_rows.append((float(toks[1]), float(toks[2]), float(toks[3])))
+
+            if len(flh_rows) == len(xyz_records) and len(enh_rows) == len(xyz_records):
+                out = []
+                for (fi, la, h_flh), (e_tm, n_tm, h_enh) in zip(flh_rows, enh_rows):
+                    out.append((fi, la, h_enh, e_tm, n_tm))
+                return out
+        except Exception:
+            pass
+
+    # Čisti Python izračun (GRS80 + Redfearn 8. reda)
+    out = []
+    for xv, yv, zv in xyz_records:
+        fi, la, h = xyz_to_flh_grs80(float(xv), float(yv), float(zv))
+        e_tm, n_tm = fl_to_en_d96tm(fi, la)
+        out.append((fi, la, h, e_tm, n_tm))
+    return out
 
 
 
@@ -669,18 +861,21 @@ def compare_two_coordinate_files(
     rows = []
     is_f2_minus_f1 = mode_subtraction.startswith("Δ = Datoteka 2 - Datoteka 1")
 
-    for name in matched_names:
+    xyz1_list = [(dict1[n]["X"], dict1[n]["Y"], dict1[n]["Z"]) for n in matched_names]
+    xyz2_list = [(dict2[n]["X"], dict2[n]["Y"], dict2[n]["Z"]) for n in matched_names]
+    conv1_list = convert_xyz_batch_crdcon_or_python(xyz1_list)
+    conv2_list = convert_xyz_batch_crdcon_or_python(xyz2_list)
+
+    for idx_m, name in enumerate(matched_names):
         pt1 = dict1[name]
         pt2 = dict2[name]
 
-        phi1, lam1, h1 = xyz_to_flh_grs80(pt1["X"], pt1["Y"], pt1["Z"])
-        e1, n1 = fl_to_en_d96tm(phi1, lam1)
-        N1 = estimate_geoid_slo_vrp2016_koper(phi1, lam1)
+        phi1, lam1, h1, e1, n1 = conv1_list[idx_m]
+        N1 = estimate_geoid_slo_vrp2016_koper(phi1, lam1, name)
         H1 = h1 - N1
 
-        phi2, lam2, h2 = xyz_to_flh_grs80(pt2["X"], pt2["Y"], pt2["Z"])
-        e2, n2 = fl_to_en_d96tm(phi2, lam2)
-        N2 = estimate_geoid_slo_vrp2016_koper(phi2, lam2)
+        phi2, lam2, h2, e2, n2 = conv2_list[idx_m]
+        N2 = estimate_geoid_slo_vrp2016_koper(phi2, lam2, name)
         H2 = h2 - N2
 
         if is_f2_minus_f1:
@@ -1306,7 +1501,11 @@ def render_satelitska_vaja3_module(current_user: dict):
                             if parsed:
                                 new_pts.append(parsed)
                             else:
-                                st.warning(f"V datoteki `{uf.name}` ni bilo mogoče najti tabele ocenjenih neznank (razdelek 2).")
+                                multi_parsed = parse_combined_itrf_txt(text_content, uf.name)
+                                if multi_parsed:
+                                    new_pts.extend(multi_parsed)
+                                else:
+                                    st.warning(f"V datoteki `{uf.name}` ni bilo mogoče najti tabele ocenjenih neznank (razdelek 2) ali stolpcev TOCKA X Y Z.")
                     if new_pts:
                         st.session_state.v3_df_points = pd.DataFrame(new_pts)
                         st.success(f"✅ Uspešno izluščenih {len(new_pts)} točk iz naloženih poročil!")
@@ -1336,6 +1535,26 @@ def render_satelitska_vaja3_module(current_user: dict):
                     st.rerun()
                 else:
                     st.warning("V korenski mapi ni bilo najdeno nobeno poročilo izravnave.")
+
+            comb_candidates = [
+                fn for fn in sorted(os.listdir(root_dir))
+                if fn.lower().endswith(".txt") and "izravnane" in fn.lower() and "itrf2020" in fn.lower()
+            ]
+            if comb_candidates:
+                if st.button(f"📍 Naloži združene ITRF2020 koordinate ({comb_candidates[0]})", use_container_width=True):
+                    cpath = os.path.join(root_dir, comb_candidates[0])
+                    comb_pts = []
+                    for enc in ["utf-8", "cp1250", "latin1"]:
+                        try:
+                            with open(cpath, "r", encoding=enc) as f:
+                                comb_pts = parse_combined_itrf_txt(f.read(), comb_candidates[0])
+                            break
+                        except Exception:
+                            continue
+                    if comb_pts:
+                        st.session_state.v3_df_points = pd.DataFrame(comb_pts)
+                        st.toast(f"✅ Naloženih {len(comb_pts)} točk iz {comb_candidates[0]}!")
+                        st.rerun()
 
             if st.button("📡 Dodaj vzorčne postaje SIGNAL (BODO, BOVC, BRZC, CELJ, CRNM) + FGG2", use_container_width=True):
                 sample_pts = [
@@ -1645,8 +1864,15 @@ def render_satelitska_vaja3_module(current_user: dict):
                     st.rerun()
 
         # Izračun ETRF2000 koordinat, elipsoidnih koordinat (fi, la, h), ravninskih (e, n) in višin SVS2010 (H)
-        etrf_rows = []
         custom_epn_dict = st.session_state.get("v3_custom_epn_xyz", {})
+        pts_sig_raw = f"{epoch_tc:.6f}|" + "|".join(
+            f"{str(r['Točka']).strip()}:{float(r['X [m]']):.6f}:{float(r['Y [m]']):.6f}:{float(r['Z [m]']):.6f}"
+            for _, r in df_active.iterrows()
+        ) + "|" + str(sorted(custom_epn_dict.items()))
+        pts_sig_t2 = hashlib.md5(pts_sig_raw.encode("utf-8")).hexdigest()[:10]
+
+        etrf_xyz_list = []
+        etrf_meta = []
         for _, r in df_active.iterrows():
             pt = str(r["Točka"]).strip()
             Xi, Yi, Zi = float(r["X [m]"]), float(r["Y [m]"]), float(r["Z [m]"])
@@ -1654,8 +1880,12 @@ def render_satelitska_vaja3_module(current_user: dict):
                 Xe, Ye, Ze = custom_epn_dict[pt.upper()]
             else:
                 Xe, Ye, Ze = transform_itrf2020_to_etrf2000(Xi, Yi, Zi, epoch_tc)
-            fi_deg, la_deg, h_ell = xyz_to_flh_grs80(Xe, Ye, Ze)
-            e_tm, n_tm = fl_to_en_d96tm(fi_deg, la_deg)
+            etrf_xyz_list.append((Xe, Ye, Ze))
+            etrf_meta.append((pt, Xe, Ye, Ze))
+
+        etrf_conv_list = convert_xyz_batch_crdcon_or_python(etrf_xyz_list)
+        etrf_rows = []
+        for (pt, Xe, Ye, Ze), (fi_deg, la_deg, h_ell, e_tm, n_tm) in zip(etrf_meta, etrf_conv_list):
             N_geoid = estimate_geoid_slo_vrp2016_koper(fi_deg, la_deg, pt)
             H_svs = h_ell - N_geoid
 
@@ -1683,7 +1913,7 @@ def render_satelitska_vaja3_module(current_user: dict):
         edited_etrf = st.data_editor(
             df_etrf_calc,
             use_container_width=True,
-            key="v3_etrf_editor",
+            key=f"v3_etrf_editor_v2_{pts_sig_t2}",
             column_config={
                 "X_ETRF2000 [m]": st.column_config.NumberColumn("X_ETRF2000 [m]", format="%.5f"),
                 "Y_ETRF2000 [m]": st.column_config.NumberColumn("Y_ETRF2000 [m]", format="%.5f"),
@@ -1698,12 +1928,15 @@ def render_satelitska_vaja3_module(current_user: dict):
             }
         )
 
-        # Če je uporabnik spremenil X, Y, Z ali N_geoid, osvežimo izpeljane stolpce
+        # Če je uporabnik spremenil X, Y, Z ali N_geoid, osvežimo izpeljane stolpce prek CrdCon / Python
+        ed_etrf_xyz = [
+            (float(r["X_ETRF2000 [m]"]), float(r["Y_ETRF2000 [m]"]), float(r["Z_ETRF2000 [m]"]))
+            for _, r in edited_etrf.iterrows()
+        ]
+        ed_etrf_conv = convert_xyz_batch_crdcon_or_python(ed_etrf_xyz)
         recalc_etrf_rows = []
-        for _, r in edited_etrf.iterrows():
+        for (_, r), (fi_d, la_d, h_el, e_t, n_t) in zip(edited_etrf.iterrows(), ed_etrf_conv):
             Xe, Ye, Ze = float(r["X_ETRF2000 [m]"]), float(r["Y_ETRF2000 [m]"]), float(r["Z_ETRF2000 [m]"])
-            fi_d, la_d, h_el = xyz_to_flh_grs80(Xe, Ye, Ze)
-            e_t, n_t = fl_to_en_d96tm(fi_d, la_d)
             N_g = float(r["N_geoid (SLO-VRP2016) [m]"])
             H_s = h_el - N_g
             recalc_etrf_rows.append({
@@ -1778,6 +2011,12 @@ def render_satelitska_vaja3_module(current_user: dict):
         - **Model (b): Model 2.0 (SLO4D, marec 2026)** — državni geokinematski model relativnih premikov na območju Slovenije.
         """)
 
+        pts_sig_t3_raw = f"{epoch_tc:.6f}|" + "|".join(
+            f"{str(r['Točka']).strip()}:{float(r['X [m]']):.6f}:{float(r['Y [m]']):.6f}:{float(r['Z [m]']):.6f}"
+            for _, r in df_active.iterrows()
+        )
+        pts_sig_t3 = hashlib.md5(pts_sig_t3_raw.encode("utf-8")).hexdigest()[:10]
+
         # Priprava tabele hitrosti SLO4D za točke
         vel_init_rows = []
         for _, r in df_active.iterrows():
@@ -1794,6 +2033,7 @@ def render_satelitska_vaja3_module(current_user: dict):
             })
         df_vel_init = pd.DataFrame(vel_init_rows)
 
+        vel_editor_key = f"v3_slo4d_vel_editor_v2_{pts_sig_t3}"
         with st.expander("⚙️ Nastavitve geokinematskega modela hitrosti Model 2.0 (SLO4D, marec 2026) in parametrov D17 ➔ D96-17", expanded=False):
             st.markdown("""
             Spodaj so relativne hitrosti točk v **ETRF2000** po modelu **SLO4D (Model 2.0, marec 2026)** v lokalnem sistemu $(v_N, v_E, v_U)$ [mm/leto].
@@ -1803,15 +2043,14 @@ def render_satelitska_vaja3_module(current_user: dict):
             df_vel_edited = st.data_editor(
                 df_vel_init,
                 use_container_width=True,
-                key="v3_slo4d_vel_editor"
+                key=vel_editor_key
             )
-        if "v3_slo4d_vel_editor" not in st.session_state:
+        if vel_editor_key not in st.session_state:
             df_vel_edited = df_vel_init
 
-        # Izračun za Model (a): Ničelni vektorji hitrosti (v ETRF2000)
-        rows_model_a = []
-        rows_model_b = []
-
+        # Izračun za Model (a): Ničelni vektorji hitrosti (v ETRF2000) in Model (b): SLO4D
+        meta_a_xyz = []
+        meta_a_info = []
         for idx, r in df_active.iterrows():
             pt = str(r["Točka"]).strip()
             Xi, Yi, Zi = float(r["X [m]"]), float(r["Y [m]"]), float(r["Z [m]"])
@@ -1821,10 +2060,16 @@ def render_satelitska_vaja3_module(current_user: dict):
             vU = float(vel_row["v_U (SLO4D) [mm/leto]"])
             N_g = float(vel_row["N_geoid (SLO-VRP2016) [m]"])
 
-            # Model (a): v = 0
             Xa, Ya, Za = transform_itrf2020_to_d96_17(Xi, Yi, Zi, epoch_tc, 0.0, 0.0, 0.0)
-            fia, laa, ha = xyz_to_flh_grs80(Xa, Ya, Za)
-            ea, na = fl_to_en_d96tm(fia, laa)
+            meta_a_xyz.append((Xa, Ya, Za))
+            meta_a_info.append((pt, Xi, Yi, Zi, Xa, Ya, Za, vN, vE, vU, N_g))
+
+        conv_a_list = convert_xyz_batch_crdcon_or_python(meta_a_xyz)
+
+        rows_model_a = []
+        meta_b_xyz = []
+        meta_b_info = []
+        for (pt, Xi, Yi, Zi, Xa, Ya, Za, vN, vE, vU, N_g), (fia, laa, ha, ea, na) in zip(meta_a_info, conv_a_list):
             Ha = ha - N_g
             rows_model_a.append({
                 "Točka": pt,
@@ -1840,11 +2085,14 @@ def render_satelitska_vaja3_module(current_user: dict):
                 "H (SVS2010) [m]": Ha,
             })
 
-            # Model (b): Model 2.0 (SLO4D, marec 2026)
             vX, vY, vZ = neu_velocity_to_xyz(vN, vE, vU, fia, laa)
             Xb, Yb, Zb = transform_itrf2020_to_d96_17(Xi, Yi, Zi, epoch_tc, vX, vY, vZ)
-            fib, lab, hb = xyz_to_flh_grs80(Xb, Yb, Zb)
-            eb, nb = fl_to_en_d96tm(fib, lab)
+            meta_b_xyz.append((Xb, Yb, Zb))
+            meta_b_info.append((pt, Xb, Yb, Zb, N_g))
+
+        conv_b_list = convert_xyz_batch_crdcon_or_python(meta_b_xyz)
+        rows_model_b = []
+        for (pt, Xb, Yb, Zb, N_g), (fib, lab, hb, eb, nb) in zip(meta_b_info, conv_b_list):
             Hb = hb - N_g
             rows_model_b.append({
                 "Točka": pt,
@@ -1868,7 +2116,7 @@ def render_satelitska_vaja3_module(current_user: dict):
         ed_mod_a = st.data_editor(
             df_mod_a_init,
             use_container_width=True,
-            key="v3_mod_a_editor",
+            key=f"v3_mod_a_editor_v2_{pts_sig_t3}",
             column_config={
                 "X_D96-17 [m]": st.column_config.NumberColumn("X_D96-17 [m]", format="%.5f"),
                 "Y_D96-17 [m]": st.column_config.NumberColumn("Y_D96-17 [m]", format="%.5f"),
@@ -1888,7 +2136,7 @@ def render_satelitska_vaja3_module(current_user: dict):
         ed_mod_b = st.data_editor(
             df_mod_b_init,
             use_container_width=True,
-            key="v3_mod_b_editor",
+            key=f"v3_mod_b_editor_v2_{pts_sig_t3}",
             column_config={
                 "X_D96-17 [m]": st.column_config.NumberColumn("X_D96-17 [m]", format="%.5f"),
                 "Y_D96-17 [m]": st.column_config.NumberColumn("Y_D96-17 [m]", format="%.5f"),
@@ -1904,35 +2152,16 @@ def render_satelitska_vaja3_module(current_user: dict):
         )
 
         def _sync_d96_table(df_ed: pd.DataFrame, df_orig: pd.DataFrame) -> pd.DataFrame:
+            xyz_list = [
+                (float(r_ed["X_D96-17 [m]"]), float(r_ed["Y_D96-17 [m]"]), float(r_ed["Z_D96-17 [m]"]))
+                for _, r_ed in df_ed.iterrows()
+            ]
+            conv_list = convert_xyz_batch_crdcon_or_python(xyz_list)
             synced = []
-            for idx_r, r_ed in df_ed.iterrows():
+            for idx_r, ((_, r_ed), (fi_c, la_c, h_c, e_c, n_c)) in enumerate(zip(df_ed.iterrows(), conv_list)):
                 X_c, Y_c, Z_c = float(r_ed["X_D96-17 [m]"]), float(r_ed["Y_D96-17 [m]"]), float(r_ed["Z_D96-17 [m]"])
                 N_g = float(r_ed["N_geoid [m]"])
-                # Če je uporabnik spremenil X, Y, Z, preračunamo fi, la, e, n, h, H
-                if idx_r < len(df_orig):
-                    r_or = df_orig.iloc[idx_r]
-                    xyz_changed = (
-                        abs(X_c - float(r_or["X_D96-17 [m]"])) > 1e-6
-                        or abs(Y_c - float(r_or["Y_D96-17 [m]"])) > 1e-6
-                        or abs(Z_c - float(r_or["Z_D96-17 [m]"])) > 1e-6
-                    )
-                    ng_changed = abs(N_g - float(r_or["N_geoid [m]"])) > 1e-6
-                else:
-                    xyz_changed = True
-                    ng_changed = True
-
-                if xyz_changed:
-                    fi_c, la_c, h_c = xyz_to_flh_grs80(X_c, Y_c, Z_c)
-                    e_c, n_c = fl_to_en_d96tm(fi_c, la_c)
-                    H_c = h_c - N_g
-                elif ng_changed:
-                    fi_c, la_c, h_c = float(r_ed["φ [°]"]), float(r_ed["λ [°]"]), float(r_ed["h (GRS80) [m]"])
-                    e_c, n_c = float(r_ed["e (D96-17/TM) [m]"]), float(r_ed["n (D96-17/TM) [m]"])
-                    H_c = h_c - N_g
-                else:
-                    fi_c, la_c, h_c = float(r_ed["φ [°]"]), float(r_ed["λ [°]"]), float(r_ed["h (GRS80) [m]"])
-                    e_c, n_c = float(r_ed["e (D96-17/TM) [m]"]), float(r_ed["n (D96-17/TM) [m]"])
-                    H_c = float(r_ed["H (SVS2010) [m]"])
+                H_c = h_c - N_g
 
                 synced.append({
                     "Točka": r_ed["Točka"],
